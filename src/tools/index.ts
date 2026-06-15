@@ -11,6 +11,7 @@ import { webFetch } from './builtin/webFetch.js';
 import { createWebSearchTool, type SearchProvider } from './builtin/webSearch.js';
 import { createShellTool, type ShellToolOptions } from './builtin/shell.js';
 import { createTradingTools, type BrokerProvider } from './builtin/trading.js';
+import { createGithubTools, type GithubClient } from './builtin/github.js';
 import { createMemoryTools } from './builtin/memory.js';
 import type { StructuredStore } from '../memory/stores.js';
 import { createPythonTool, type PythonToolOptions } from './builtin/python.js';
@@ -33,6 +34,8 @@ export interface RegistryOptions {
   systemActionsEnabled?: boolean;
   /** Optional broker backend. Trading tools are registered only when present. */
   tradingProvider?: BrokerProvider;
+  /** Optional GitHub client. The github_* dev tools are registered only when present. */
+  githubClient?: GithubClient;
   /** Structured memory tools. Present in normal runtime, optional in isolated tests. */
   structuredStore?: StructuredStore;
   /**
@@ -92,6 +95,10 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
 
   if (opts.tradingProvider) {
     for (const tool of createTradingTools(opts.tradingProvider)) registry.register(tool);
+  }
+
+  if (opts.githubClient) {
+    for (const tool of createGithubTools(opts.githubClient)) registry.register(tool);
   }
 
   if (opts.structuredStore) {

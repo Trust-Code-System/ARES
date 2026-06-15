@@ -67,6 +67,10 @@ export interface Config {
   /** Tavily key for web_search. Absent → web_search is not registered. */
   tavilyApiKey?: string;
   searchProvider: 'auto' | 'google' | 'tavily';
+  /** GitHub token for the dev tools. Absent → the github_* tools are not registered. */
+  githubToken?: string;
+  /** GitHub REST API base URL (override for GitHub Enterprise). */
+  githubApiBaseUrl?: string;
   // --- Phase 4: autonomy ---
   /** Redis connection string for the BullMQ scheduler. Absent → in-memory scheduler. */
   redisUrl?: string;
@@ -175,6 +179,8 @@ export function loadConfig(): Config {
     workspaceDir: path.resolve(process.env.ARES_WORKSPACE_DIR ?? './workspace'),
     tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
     searchProvider: searchProvider as Config['searchProvider'],
+    githubToken: process.env.GITHUB_TOKEN || undefined,
+    githubApiBaseUrl: process.env.GITHUB_API_URL || undefined,
     redisUrl: process.env.REDIS_URL || undefined,
     mcpServers: parseMcpServers(process.env.ARES_MCP_SERVERS),
     webhookSecret: process.env.ARES_WEBHOOK_SECRET || undefined,

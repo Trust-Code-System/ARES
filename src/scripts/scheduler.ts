@@ -26,6 +26,7 @@ import { buildLlmClient } from '../llm/factory.js';
 import { createDefaultRegistry } from '../tools/index.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
 import { PaperBrokerProvider } from '../tools/builtin/trading.js';
+import { buildGithubClient } from '../tools/builtin/github.js';
 import { buildMemoryBackend, buildEmbeddings } from '../memory/factory.js';
 import { buildSafetyBackend } from '../safety/factory.js';
 import { buildAutonomyBackend, buildScheduler } from '../autonomy/factory.js';
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
   const tradingProvider = config.trading.enabled
     ? new PaperBrokerProvider({ startingCash: config.trading.startingCash })
     : undefined;
+  const githubClient = buildGithubClient(config);
 
   const agent = new Agent({
     client,
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
       python: config.python,
       systemActionsEnabled: config.systemActionsEnabled,
       ...(tradingProvider ? { tradingProvider } : {}),
+      ...(githubClient ? { githubClient } : {}),
       structuredStore: memory.structured,
       extraTools: mcp.tools,
     }),

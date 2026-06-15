@@ -124,6 +124,7 @@ export interface RuntimeStatus {
   pythonEnabled: boolean;
   systemActionsEnabled: boolean;
   tradingEnabled: boolean;
+  githubEnabled: boolean;
   connectors: string[];
 }
 

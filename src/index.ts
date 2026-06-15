@@ -19,6 +19,7 @@ import { buildVisionExtractor } from './llm/vision.js';
 import { createDefaultRegistry } from './tools/index.js';
 import { buildSearchProvider } from './tools/searchFactory.js';
 import { buildBrokerProvider } from './tools/builtin/trading.js';
+import { buildGithubClient } from './tools/builtin/github.js';
 import { buildMemoryBackend } from './memory/factory.js';
 import { buildSafetyBackend } from './safety/factory.js';
 import { buildMcpTools } from './mcp/factory.js';
@@ -69,6 +70,9 @@ async function main(): Promise<void> {
   const tradingProvider = buildBrokerProvider(config.trading);
   if (tradingProvider) logger.info('trading enabled', { broker: tradingProvider.name });
 
+  const githubClient = buildGithubClient(config);
+  if (!githubClient) logger.warn('No GITHUB_TOKEN — github_* dev tools are disabled.');
+
   // OCR for extract_image_text always uses Claude vision when an Anthropic key is
   // present, independent of the chosen reasoning provider.
   const visionExtractor = buildVisionExtractor({
@@ -84,6 +88,7 @@ async function main(): Promise<void> {
     python: config.python,
     systemActionsEnabled: config.systemActionsEnabled,
     ...(tradingProvider ? { tradingProvider } : {}),
+    ...(githubClient ? { githubClient } : {}),
     structuredStore: memory.structured,
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,

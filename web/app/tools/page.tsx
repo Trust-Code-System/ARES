@@ -18,6 +18,7 @@ const ENV_HINTS: Array<{ label: string; vars: string; when: (r: RuntimeStatus | 
   { label: 'Sandboxed shell', vars: 'ARES_SHELL_ENABLED=true', when: (r) => !r?.shellEnabled },
   { label: 'System actions', vars: 'ARES_SYSTEM_ACTIONS_ENABLED=true', when: (r) => !r?.systemActionsEnabled },
   { label: 'Trading tools', vars: 'ARES_TRADING_ENABLED=true (+ ALPACA_* for live)', when: (r) => !r?.tradingEnabled },
+  { label: 'GitHub dev tools', vars: 'GITHUB_TOKEN (+ GITHUB_API_URL for Enterprise)', when: (r) => !r?.githubEnabled },
   { label: 'Connected apps', vars: 'ARES_MCP_SERVERS (Gmail, Calendar, Drive via MCP)', when: (r) => !r?.connectors.length },
 ];
 
@@ -126,6 +127,7 @@ export default function ToolSettings() {
               <Capability name="Python execution" detail="Confirmation-gated isolated runner" enabled={Boolean(runtime?.pythonEnabled)} warning={!runtime?.pythonEnabled} />
               <Capability name="System actions" detail="Open approved apps and HTTP(S) sites" enabled={Boolean(runtime?.systemActionsEnabled)} warning={!runtime?.systemActionsEnabled} />
               <Capability name="Trading tools" detail="Read-only by default; trades are gated" enabled={Boolean(runtime?.tradingEnabled)} warning={!runtime?.tradingEnabled} />
+              <Capability name="GitHub dev tools" detail="Search + read code; issue creation is gated" enabled={Boolean(runtime?.githubEnabled)} warning={!runtime?.githubEnabled} />
               <Capability name="Connected apps" detail={runtime?.connectors.length ? runtime.connectors.join(', ') : 'No MCP connectors active'} enabled={Boolean(runtime?.connectors.length)} warning={!runtime?.connectors.length} />
             </div>
           </HudPanel>

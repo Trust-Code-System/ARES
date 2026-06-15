@@ -188,6 +188,8 @@ not the prompt. Current suite:
 | `open_application` · `open_url` | state-mutating | Approved app aliases and HTTP(S) URLs only; always gated. |
 | `get_positions` · `get_balance` | read-only | **Off by default.** Brokerage reads via a pluggable provider — paper broker, or **Alpaca** (`ARES_BROKER=alpaca`). |
 | `place_trade` | state-mutating | **Off by default.** Gated + subject to the hard trade notional cap. Executes via the paper or Alpaca broker. |
+| `github_search` · `github_read_file` | read-only | **Off by default.** Search repos/code/issues and read a file from a repo via the GitHub REST API. Registered when `GITHUB_TOKEN` is set. |
+| `github_create_issue` | state-mutating | **Off by default.** Open an issue in a repo; gated like every write. |
 | `calculate` · `get_current_time` | read-only | Deterministic built-ins. |
 | *MCP-imported* (Gmail, Calendar, …) | classified per tool | Imported from MCP servers; read verbs → read-only, everything else → gated. |
 
@@ -466,6 +468,8 @@ npm run typecheck         # tsc --noEmit
 | `ARES_EMBEDDING_DIM`      | `1024`              | Embedding dimension. **Must match the `vector(N)` column in the migration.** |
 | `ARES_WORKSPACE_DIR`      | `./workspace`       | Sandbox the file tools are jailed to.                       |
 | `TAVILY_API_KEY`          | — (optional)        | Enables `web_search`. Unset → the tool isn't registered.    |
+| `GITHUB_TOKEN`            | — (optional)        | Enables the `github_*` dev tools (search/read read-only, issue creation gated). Unset → not registered. |
+| `GITHUB_API_URL`          | `https://api.github.com` | GitHub REST base URL; override for GitHub Enterprise Server. |
 | `REDIS_URL`               | — (optional)        | Redis for the BullMQ scheduler **and** the durable memory ingestion queue. Unset → in-memory scheduler + in-process queue (no persistence). |
 | `ARES_MCP_SERVERS`        | — (optional)        | JSON array of stdio MCP servers to import tools from (see below). Unset → none. |
 | `ARES_WEBHOOK_SECRET`     | — (optional)        | Shared secret enabling the daemon's webhook trigger endpoint. Unset → webhooks off. |

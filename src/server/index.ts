@@ -14,6 +14,7 @@ import { buildVisionExtractor } from '../llm/vision.js';
 import { createDefaultRegistry } from '../tools/index.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
 import { buildBrokerProvider } from '../tools/builtin/trading.js';
+import { buildGithubClient } from '../tools/builtin/github.js';
 import { buildMemoryBackend } from '../memory/factory.js';
 import { buildSafetyBackend } from '../safety/factory.js';
 import { buildAutonomyBackend } from '../autonomy/factory.js';
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
 
   const searchProvider = buildSearchProvider(config);
   const tradingProvider = buildBrokerProvider(config.trading);
+  const githubClient = buildGithubClient(config);
   const visionExtractor = buildVisionExtractor({
     ...(config.anthropicApiKey ? { anthropicApiKey: config.anthropicApiKey } : {}),
     model: config.fastModel,
@@ -85,6 +87,7 @@ async function main(): Promise<void> {
     python: config.python,
     systemActionsEnabled: config.systemActionsEnabled,
     ...(tradingProvider ? { tradingProvider } : {}),
+    ...(githubClient ? { githubClient } : {}),
     structuredStore: memory.structured,
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
@@ -141,6 +144,7 @@ async function main(): Promise<void> {
         pythonEnabled: config.python.enabled,
         systemActionsEnabled: config.systemActionsEnabled,
         tradingEnabled: config.trading.enabled,
+        githubEnabled: Boolean(githubClient),
         connectors: config.mcpServers.map((server) => server.name),
       },
     },

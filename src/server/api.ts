@@ -75,6 +75,7 @@ export interface ApiDeps {
     pythonEnabled?: boolean;
     systemActionsEnabled?: boolean;
     tradingEnabled: boolean;
+    githubEnabled?: boolean;
     connectors: string[];
   };
 }
@@ -121,6 +122,7 @@ export class ApiHandler {
         pythonEnabled: this.deps.runtime?.pythonEnabled ?? this.deps.registry.has('run_python'),
         systemActionsEnabled: this.deps.runtime?.systemActionsEnabled ?? this.deps.registry.has('open_application'),
         tradingEnabled: this.deps.runtime?.tradingEnabled ?? this.deps.registry.has('place_trade'),
+        githubEnabled: this.deps.runtime?.githubEnabled ?? this.deps.registry.has('github_search'),
         connectors: this.deps.runtime?.connectors ?? [],
       });
     }
