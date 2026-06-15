@@ -1,0 +1,7 @@
+# Shell scripts and Dockerfiles must stay LF — they run inside Linux containers,
+# where CRLF would break the shebang / parsing.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.Dockerfile text eol=lf
+Caddyfile   text eol=lf
+deploy/api-entrypoint.sh text eol=lf

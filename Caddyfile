@@ -1,0 +1,20 @@
+# Caddy fronts both apps with automatic Let's Encrypt TLS.
+#   https://${ARES_DOMAIN}      → web UI  (web:3000)
+#   https://api.${ARES_DOMAIN}  → API     (api:3001)
+#
+# A real domain (DNS A-records for both names → this server) is required for
+# automatic HTTPS. For an IP-only / no-domain box, see DEPLOY.md for the plain
+# :80 variant.
+
+{$ARES_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:3000
+}
+
+api.{$ARES_DOMAIN} {
+	# Stream Server-Sent Events (the chat stream) without buffering, so tokens
+	# arrive live instead of all at once.
+	reverse_proxy api:3001 {
+		flush_interval -1
+	}
+}

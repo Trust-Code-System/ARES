@@ -1,0 +1,94 @@
+# ARES single-VPS deployment: API + Web + Dragonfly, fronted by Caddy (auto-HTTPS).
+#
+# Domains (DNS A-records → this VPS):
+#   ${ARES_DOMAIN}        → web UI
+#   api.${ARES_DOMAIN}    → API server
+#
+# Postgres is NOT run here — point DATABASE_URL (in .env) at your managed Postgres
+# (Supabase etc.) with the pgvector extension available.
+#
+# Required in .env (compose reads it for interpolation AND the api gets it via
+# env_file): ARES_DOMAIN, ARES_API_KEY, ANTHROPIC_API_KEY (or GEMINI_API_KEY),
+# DATABASE_URL, plus any voice/search keys you use.
+
+services:
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    restart: unless-stopped
+    command: ["--logtostderr", "--dir", "/data", "--dbfilename", "ares-dump"]
+    ulimits:
+      memlock: -1
+    volumes:
+      - dragonfly-data:/data
+    networks:
+      - ares
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Bind publicly inside the container (Caddy proxies to it); guarded by ARES_API_KEY.
+      ARES_API_HOST: 0.0.0.0
+      ARES_API_PORT: "3001"
+      # Browser origin allowed by CORS = the web UI's public URL.
+      ARES_API_ORIGINS: "https://${ARES_DOMAIN}"
+      # Durable scheduler + memory queue via the Redis-compatible Dragonfly.
+      REDIS_URL: "redis://dragonfly:6379"
+      # Container-local workspace (overrides any host path baked into .env).
+      ARES_WORKSPACE_DIR: /data/workspace
+    volumes:
+      - ares-workspace:/data/workspace
+    depends_on:
+      - dragonfly
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - ares
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Inlined at build time — the public API URL as the browser sees it.
+        NEXT_PUBLIC_ARES_API: "https://api.${ARES_DOMAIN}"
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - ares
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ARES_DOMAIN: "${ARES_DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+    networks:
+      - ares
+
+networks:
+  ares:
+
+volumes:
+  dragonfly-data:
+  ares-workspace:
+  caddy-data:
+  caddy-config:

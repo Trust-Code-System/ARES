@@ -1,0 +1,15 @@
+# Keep the API build context small and secret-free.
+node_modules
+dist
+.venv
+.git
+.gitignore
+.env
+.env.*
+web
+desktop/__pycache__
+desktop/.venv
+**/*.log
+.qodo
+.next
+npm-debug.log*
