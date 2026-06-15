@@ -13,6 +13,7 @@ import {
   OpenAiVoiceProvider,
   CompositeVoiceProvider,
   ElevenLabsTextToSpeechProvider,
+  GeminiTextToSpeechProvider,
   FakeVoiceProvider,
   GeminiSpeechToTextProvider,
   buildVoiceProvider,
@@ -67,6 +68,25 @@ describe('buildVoiceProvider', () => {
     assert.ok(provider instanceof CompositeVoiceProvider);
     assert.equal(provider.sttProvider, 'gemini');
     assert.equal(provider.ttsProvider, 'elevenlabs');
+  });
+
+  it('runs fully on a Gemini key alone (Gemini STT + Gemini TTS)', () => {
+    const provider = buildVoiceProvider({ GEMINI_API_KEY: 'gemini-test' });
+    assert.ok(provider instanceof CompositeVoiceProvider);
+    assert.equal(provider.sttProvider, 'gemini');
+    assert.equal(provider.ttsProvider, 'gemini');
+  });
+
+  it('honours ARES_VOICE_TTS_PROVIDER=gemini with an OpenAI key present', () => {
+    const provider = buildVoiceProvider({
+      OPENAI_API_KEY: 'sk-test',
+      GEMINI_API_KEY: 'gemini-test',
+      ARES_VOICE_TTS_PROVIDER: 'gemini',
+      ARES_VOICE_STT_PROVIDER: 'openai',
+    });
+    assert.ok(provider instanceof CompositeVoiceProvider);
+    assert.equal(provider.sttProvider, 'openai');
+    assert.equal(provider.ttsProvider, 'gemini');
   });
 });
 
@@ -140,6 +160,34 @@ describe('Gemini and ElevenLabs voice providers', () => {
     );
     const parts = ((payload?.contents as Array<{ parts: unknown[] }>)[0]!.parts);
     assert.equal(parts.length, 2);
+  });
+
+  it('wraps Gemini PCM output in a WAV container', async () => {
+    let payload: Record<string, unknown> | undefined;
+    const pcm = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: pcm.toString('base64') } }] } }],
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = new GeminiTextToSpeechProvider({ apiKey: 'g', voice: 'Puck', fetchImpl });
+    const { audio, mimeType } = await provider.synthesize('hello');
+
+    assert.equal(mimeType, 'audio/wav');
+    assert.equal(audio.subarray(0, 4).toString(), 'RIFF');
+    assert.equal(audio.subarray(8, 12).toString(), 'WAVE');
+    assert.equal(audio.length, 44 + pcm.length); // header + payload
+    assert.equal(audio.readUInt32LE(24), 24000); // sample rate parsed from mime
+    const gen = payload?.generationConfig as Record<string, unknown>;
+    assert.deepEqual(gen.responseModalities, ['AUDIO']);
+  });
+
+  it('throws when Gemini returns no audio', async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'oops' }] } }] }), { status: 200 })) as unknown as typeof fetch;
+    const provider = new GeminiTextToSpeechProvider({ apiKey: 'g', fetchImpl });
+    await assert.rejects(() => provider.synthesize('x'), /no audio/i);
   });
 
   it('uses the ElevenLabs streaming endpoint and Flash model', async () => {

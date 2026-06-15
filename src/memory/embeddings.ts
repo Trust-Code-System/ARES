@@ -69,6 +69,75 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
   }
 }
 
+export interface GeminiEmbeddingOptions {
+  apiKey: string;
+  model: string;
+  dimension: number;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Gemini embeddings (https://ai.google.dev/gemini-api/docs/embeddings).
+ *
+ * Uses the batchEmbedContents endpoint and requests `outputDimensionality` so the
+ * vectors match the pgvector column width (ARES_EMBEDDING_DIM). `inputType` maps
+ * to the Gemini task type so query and document embeddings are optimized
+ * separately, exactly like the Voyage client.
+ */
+export class GeminiEmbeddingClient implements EmbeddingClient {
+  readonly dimension: number;
+  private readonly apiKey: string;
+  private readonly model: string;
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: GeminiEmbeddingOptions) {
+    this.apiKey = opts.apiKey;
+    this.model = opts.model;
+    this.dimension = opts.dimension;
+    this.baseUrl = opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  async embed(texts: string[], inputType: 'query' | 'document'): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    const taskType = inputType === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT';
+    const modelPath = `models/${this.model}`;
+    const res = await this.fetchImpl(
+      `${this.baseUrl}/${modelPath}:batchEmbedContents`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          requests: texts.map((text) => ({
+            model: modelPath,
+            content: { parts: [{ text }] },
+            taskType,
+            outputDimensionality: this.dimension,
+          })),
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Gemini embeddings failed (${res.status}): ${body.slice(0, 300)}`);
+    }
+    const json = (await res.json()) as { embeddings?: { values: number[] }[] };
+    const rows = json.embeddings ?? [];
+    if (rows.length !== texts.length) {
+      throw new Error(`Gemini embeddings returned ${rows.length} vectors for ${texts.length} inputs.`);
+    }
+    // Gemini's MRL truncation isn't renormalized; do it here so cosine distance is well-behaved.
+    return rows.map((row) => normalize(row.values));
+  }
+}
+
+function normalize(vec: number[]): number[] {
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map((v) => v / norm);
+}
+
 /**
  * Deterministic offline embedder. Hashes token trigrams into a fixed-width
  * bag-of-features vector and L2-normalizes it, so identical/overlapping text

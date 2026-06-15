@@ -376,10 +376,14 @@ allowed only on loopback; the server **refuses to bind a non-loopback
 
 ## Gemini, ElevenLabs, and desktop mode
 
-ARES can use Gemini for reasoning, turn-based audio transcription, and
-Google-grounded search while using ElevenLabs Flash v2.5 for low-latency speech
-output. Provider selection remains configurable, so OpenAI and Anthropic continue
-to work as fallbacks.
+Gemini is a first-class provider across the whole system: **reasoning**
+([llm/gemini.ts](src/llm/gemini.ts)), **research** (Google-grounded `web_search`),
+**voice input** (turn-based transcription), **voice output**
+(`ARES_VOICE_TTS_PROVIDER=gemini`, PCM wrapped to WAV), and **memory embeddings**
+(`ARES_EMBEDDING_PROVIDER=gemini`). With a single `GEMINI_API_KEY` ARES can run
+reasoning + search + full voice + semantic memory end to end. Provider selection
+stays configurable, so OpenAI, Anthropic, Voyage, and ElevenLabs remain available
+and are the defaults under `auto`.
 
 The current conversation transport is low-latency push-to-talk with interruptible
 playback. It is not an always-open, full-duplex Gemini Live WebSocket session;
@@ -409,8 +413,9 @@ Relevant environment variables:
 
 - `GEMINI_API_KEY`, `ARES_GEMINI_REASONING_MODEL`, `ARES_GEMINI_FAST_MODEL`
 - `ARES_SEARCH_PROVIDER=auto|google|tavily`
+- `ARES_EMBEDDING_PROVIDER=auto|voyage|gemini`, `ARES_GEMINI_EMBEDDING_MODEL`
 - `ARES_VOICE_STT_PROVIDER=auto|gemini|openai`
-- `ARES_VOICE_TTS_PROVIDER=auto|elevenlabs|openai`
+- `ARES_VOICE_TTS_PROVIDER=auto|elevenlabs|openai|gemini`, `ARES_GEMINI_TTS_MODEL`, `ARES_GEMINI_TTS_VOICE`
 - `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL`
 - `ARES_PYTHON_ENABLED`, `ARES_PYTHON_COMMAND`, `ARES_PYTHON_TIMEOUT_MS`
 - `ARES_SYSTEM_ACTIONS_ENABLED`
@@ -468,7 +473,9 @@ npm run typecheck         # tsc --noEmit
 | `ARES_CONFIRMATION_MODE`  | `prompt`            | `prompt` (ask at terminal) · `auto` (approve, dev only) · `deny` (read-only safe mode). |
 | `DATABASE_URL`            | — (optional)        | Postgres/Supabase connection string. Unset → ephemeral in-memory memory + audit. |
 | `VOYAGE_API_KEY`          | — (optional)        | Voyage AI key for embeddings. Unset → offline hash embedder (poor recall). |
-| `ARES_EMBEDDING_MODEL`    | `voyage-3.5`        | Embedding model.                                             |
+| `ARES_EMBEDDING_PROVIDER` | `auto`              | Embedding backend: `auto` (Voyage→Gemini→hash) · `voyage` · `gemini`. `gemini` uses `GEMINI_API_KEY`. |
+| `ARES_EMBEDDING_MODEL`    | `voyage-3.5`        | Voyage embedding model.                                      |
+| `ARES_GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Gemini embedding model (when the Gemini embedder is selected). Output truncated to `ARES_EMBEDDING_DIM`. |
 | `ARES_EMBEDDING_DIM`      | `1024`              | Embedding dimension. **Must match the `vector(N)` column in the migration.** |
 | `ARES_WORKSPACE_DIR`      | `./workspace`       | Sandbox the file tools are jailed to.                       |
 | `TAVILY_API_KEY`          | — (optional)        | Enables `web_search`. Unset → the tool isn't registered.    |

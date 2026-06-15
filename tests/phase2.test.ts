@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import type Anthropic from '@anthropic-ai/sdk';
 import { Agent, type MessageClient } from '../src/agent/orchestrator.js';
 import type { CreateMessageParams } from '../src/llm/anthropic.js';
-import { HashEmbeddingClient } from '../src/memory/embeddings.js';
+import { HashEmbeddingClient, GeminiEmbeddingClient } from '../src/memory/embeddings.js';
 import {
   InMemorySemanticStore,
   InMemoryStructuredStore,
@@ -53,6 +53,41 @@ describe('hash embedder', () => {
       'document',
     );
     assert.ok(cosine(q!, near!) > cosine(q!, far!));
+  });
+});
+
+describe('Gemini embedder', () => {
+  it('requests the configured dimension + task type and returns normalized vectors', async () => {
+    let payload: Record<string, unknown> | undefined;
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      assert.match(String(url), /:batchEmbedContents$/);
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ embeddings: [{ values: [3, 4] }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const e = new GeminiEmbeddingClient({ apiKey: 'g', model: 'gemini-embedding-001', dimension: 2, fetchImpl });
+    const [vec] = await e.embed(['hello'], 'query');
+
+    assert.equal(e.dimension, 2);
+    assert.deepEqual(vec, [0.6, 0.8]); // [3,4] L2-normalized
+    const req = (payload?.requests as Array<Record<string, unknown>>)[0]!;
+    assert.equal(req.taskType, 'RETRIEVAL_QUERY');
+    assert.equal(req.outputDimensionality, 2);
+  });
+
+  it('rejects a response whose vector count does not match the input count', async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ embeddings: [{ values: [1, 0] }] }), { status: 200 })) as unknown as typeof fetch;
+    const e = new GeminiEmbeddingClient({ apiKey: 'g', model: 'm', dimension: 2, fetchImpl });
+    await assert.rejects(() => e.embed(['a', 'b'], 'document'), /2 vectors for 2 inputs|1 vectors for 2/);
+  });
+
+  it('returns [] for an empty batch without calling the API', async () => {
+    const fetchImpl = (async () => {
+      throw new Error('should not be called');
+    }) as unknown as typeof fetch;
+    const e = new GeminiEmbeddingClient({ apiKey: 'g', model: 'm', dimension: 2, fetchImpl });
+    assert.deepEqual(await e.embed([], 'document'), []);
   });
 });
 

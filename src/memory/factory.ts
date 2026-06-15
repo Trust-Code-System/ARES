@@ -21,6 +21,7 @@ import { PostgresAuditLog } from '../logging/pgAuditLog.js';
 import {
   HashEmbeddingClient,
   VoyageEmbeddingClient,
+  GeminiEmbeddingClient,
   type EmbeddingClient,
 } from './embeddings.js';
 import {
@@ -126,16 +127,38 @@ export function buildMemoryBackend(
 }
 
 export function buildEmbeddings(config: Config, logger: Logger): EmbeddingClient {
-  if (config.voyageApiKey) {
+  const wantGemini =
+    config.embeddingProvider === 'gemini' ||
+    (config.embeddingProvider === 'auto' && !config.voyageApiKey && Boolean(config.geminiApiKey));
+  const wantVoyage =
+    config.embeddingProvider === 'voyage' ||
+    (config.embeddingProvider === 'auto' && Boolean(config.voyageApiKey));
+
+  if (wantGemini) {
+    if (!config.geminiApiKey) {
+      throw new Error('ARES_EMBEDDING_PROVIDER=gemini but no GEMINI_API_KEY is set.');
+    }
+    return new GeminiEmbeddingClient({
+      apiKey: config.geminiApiKey,
+      model: config.geminiEmbeddingModel,
+      dimension: config.embeddingDim,
+    });
+  }
+
+  if (wantVoyage) {
+    if (!config.voyageApiKey) {
+      throw new Error('ARES_EMBEDDING_PROVIDER=voyage but no VOYAGE_API_KEY is set.');
+    }
     return new VoyageEmbeddingClient({
       apiKey: config.voyageApiKey,
       model: config.embeddingModel,
       dimension: config.embeddingDim,
     });
   }
+
   logger.warn(
-    'No VOYAGE_API_KEY set — using the offline hash embedder. Semantic recall will be poor; ' +
-      'set VOYAGE_API_KEY for real embeddings.',
+    'No embeddings provider key set — using the offline hash embedder. Semantic recall will be poor; ' +
+      'set VOYAGE_API_KEY or GEMINI_API_KEY for real embeddings.',
   );
   return new HashEmbeddingClient(config.embeddingDim);
 }

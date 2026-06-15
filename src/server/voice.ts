@@ -281,6 +281,94 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
   }
 }
 
+export interface GeminiTextToSpeechOptions {
+  apiKey: string;
+  model?: string;
+  /** Prebuilt Gemini voice name (e.g. Kore, Puck, Charon, Aoede). */
+  voice?: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Gemini text-to-speech (https://ai.google.dev/gemini-api/docs/speech-generation).
+ *
+ * generateContent with an AUDIO response modality returns raw little-endian PCM
+ * (typically 24 kHz, 16-bit mono). Browsers can't play bare PCM, so we wrap it in
+ * a minimal WAV container and return audio/wav.
+ */
+export class GeminiTextToSpeechProvider implements TextToSpeechProvider {
+  readonly name = 'gemini';
+  private readonly model: string;
+  private readonly voice: string;
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(private readonly opts: GeminiTextToSpeechOptions) {
+    this.model = opts.model ?? 'gemini-2.5-flash-preview-tts';
+    this.voice = opts.voice ?? 'Kore';
+    this.baseUrl = opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  async synthesize(text: string): Promise<{ audio: Buffer; mimeType: string }> {
+    const res = await this.fetchImpl(
+      `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'x-goog-api-key': this.opts.apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voice } } },
+          },
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Gemini speech synthesis failed (${res.status}): ${body.slice(0, 300)}`);
+    }
+    const json = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> } }>;
+    };
+    const part = (json.candidates?.[0]?.content?.parts ?? []).find((p) => p.inlineData?.data);
+    const data = part?.inlineData?.data;
+    if (!data) throw new Error('Gemini returned no audio data.');
+    const pcm = Buffer.from(data, 'base64');
+    const rate = parseRate(part?.inlineData?.mimeType) ?? 24000;
+    return { audio: pcmToWav(pcm, rate), mimeType: 'audio/wav' };
+  }
+}
+
+/** Extract the sample rate from a Gemini audio mime type like "audio/L16;codec=pcm;rate=24000". */
+function parseRate(mimeType: string | undefined): number | undefined {
+  const match = mimeType?.match(/rate=(\d+)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** Wrap little-endian 16-bit mono PCM in a minimal WAV (RIFF) container. */
+function pcmToWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerSample = 16): Buffer {
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // PCM fmt chunk size
+  header.writeUInt16LE(1, 20); // audio format = PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
 /**
  * Offline double for tests: "transcribes" to a fixed string and "synthesizes" to
  * a tiny byte buffer, so the voice endpoints can be exercised end-to-end without a
@@ -323,21 +411,50 @@ export function buildVoiceProvider(env: NodeJS.ProcessEnv = process.env): VoiceP
       ? new OpenAiSpeechToTextProvider(openAiOptions(env, openaiKey))
       : undefined;
 
-  const tts = ttsChoice === 'elevenlabs' ||
-    (ttsChoice === 'auto' && Boolean(elevenKey && elevenVoice))
-    ? elevenKey && elevenVoice
+  const tts = selectTts(env, { openaiKey, geminiKey, elevenKey, elevenVoice, ttsChoice });
+
+  return stt && tts ? new CompositeVoiceProvider(stt, tts) : undefined;
+}
+
+function selectTts(
+  env: NodeJS.ProcessEnv,
+  opts: {
+    openaiKey: string | undefined;
+    geminiKey: string | undefined;
+    elevenKey: string | undefined;
+    elevenVoice: string | undefined;
+    ttsChoice: string;
+  },
+): TextToSpeechProvider | undefined {
+  const { openaiKey, geminiKey, elevenKey, elevenVoice, ttsChoice } = opts;
+  const elevenReady = Boolean(elevenKey && elevenVoice);
+
+  const eleven = (): TextToSpeechProvider | undefined =>
+    elevenKey && elevenVoice
       ? new ElevenLabsTextToSpeechProvider({
           apiKey: elevenKey,
           voiceId: elevenVoice,
           ...(env.ELEVENLABS_MODEL ? { model: env.ELEVENLABS_MODEL } : {}),
           ...(env.ELEVENLABS_OUTPUT_FORMAT ? { outputFormat: env.ELEVENLABS_OUTPUT_FORMAT } : {}),
         })
-      : undefined
-    : openaiKey
-      ? new OpenAiTextToSpeechProvider(openAiOptions(env, openaiKey))
       : undefined;
+  const gemini = (): TextToSpeechProvider | undefined =>
+    geminiKey
+      ? new GeminiTextToSpeechProvider({
+          apiKey: geminiKey,
+          ...(env.ARES_GEMINI_TTS_MODEL ? { model: env.ARES_GEMINI_TTS_MODEL } : {}),
+          ...(env.ARES_GEMINI_TTS_VOICE ? { voice: env.ARES_GEMINI_TTS_VOICE } : {}),
+        })
+      : undefined;
+  const openai = (): TextToSpeechProvider | undefined =>
+    openaiKey ? new OpenAiTextToSpeechProvider(openAiOptions(env, openaiKey)) : undefined;
 
-  return stt && tts ? new CompositeVoiceProvider(stt, tts) : undefined;
+  if (ttsChoice === 'elevenlabs') return eleven();
+  if (ttsChoice === 'gemini') return gemini();
+  if (ttsChoice === 'openai') return openai();
+  // auto: prefer ElevenLabs (lowest latency) → OpenAI → Gemini.
+  if (elevenReady) return eleven();
+  return openai() ?? gemini();
 }
 
 function openAiOptions(env: NodeJS.ProcessEnv, apiKey: string): OpenAiVoiceOptions {

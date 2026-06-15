@@ -61,6 +61,10 @@ export interface Config {
   voyageApiKey?: string;
   embeddingModel: string;
   embeddingDim: number;
+  /** Which embedding backend to use: auto (Voyage→Gemini→hash), voyage, or gemini. */
+  embeddingProvider: 'auto' | 'voyage' | 'gemini';
+  /** Gemini embedding model (used when the Gemini embedder is selected). */
+  geminiEmbeddingModel: string;
   // --- Phase 3: tools ---
   /** Absolute path to the sandbox the file tools are jailed to. */
   workspaceDir: string;
@@ -145,6 +149,11 @@ export function loadConfig(): Config {
     throw new Error(`ARES_SEARCH_PROVIDER must be auto|google|tavily, got "${searchProvider}".`);
   }
 
+  const embeddingProvider = process.env.ARES_EMBEDDING_PROVIDER ?? 'auto';
+  if (!['auto', 'voyage', 'gemini'].includes(embeddingProvider)) {
+    throw new Error(`ARES_EMBEDDING_PROVIDER must be auto|voyage|gemini, got "${embeddingProvider}".`);
+  }
+
   const sessionTtlHours = Number(process.env.ARES_SESSION_TTL_HOURS ?? '12');
   if (!Number.isFinite(sessionTtlHours) || sessionTtlHours <= 0 || sessionTtlHours > 720) {
     throw new Error(
@@ -176,6 +185,8 @@ export function loadConfig(): Config {
     voyageApiKey: process.env.VOYAGE_API_KEY || undefined,
     embeddingModel: process.env.ARES_EMBEDDING_MODEL ?? 'voyage-3.5',
     embeddingDim,
+    embeddingProvider: embeddingProvider as Config['embeddingProvider'],
+    geminiEmbeddingModel: process.env.ARES_GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001',
     workspaceDir: path.resolve(process.env.ARES_WORKSPACE_DIR ?? './workspace'),
     tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
     searchProvider: searchProvider as Config['searchProvider'],
