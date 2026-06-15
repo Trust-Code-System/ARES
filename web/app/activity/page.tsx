@@ -62,7 +62,7 @@ export default function ActionLog() {
   }
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-[1600px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8">
       <PageHeader title="Action log" subtitle="Autonomous runs, audit trail, and delivered notifications" />
 
       {error && (
@@ -127,7 +127,7 @@ export default function ActionLog() {
                 key={note.id}
                 className={`border-l-2 bg-black/20 px-3 py-2 ${note.readAt ? 'border-ares-line' : 'border-ares-cyan/60'}`}
               >
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className={`font-mono text-[9px] uppercase tracking-[0.14em] ${urgencyColor(note.urgency)}`}>{note.urgency}</span>
                   <div className="flex items-center gap-2">
                     <time className="font-mono text-[9px] text-ares-muted">{formatTime(note.createdAt)}</time>

@@ -16,6 +16,11 @@ import { TASK_PRIORITIES, TASK_STATUSES } from '../tasks/store.js';
 export const chatSchema = z.object({
   text: z.string().trim().min(1, 'body.text is required'),
   mode: z.enum(ASSISTANT_MODES).optional(),
+  /** Prior turns for multi-turn context, oldest first. Capped to keep payloads sane. */
+  history: z
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() }))
+    .max(40)
+    .optional(),
 });
 
 export const rememberSchema = z.object({

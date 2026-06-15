@@ -213,6 +213,57 @@ describe('agent lifecycle', () => {
   });
 });
 
+describe('fast conversational path', () => {
+  it('answers small talk on the fast model, skipping memory and tools', async () => {
+    const client = new SequenceClient([
+      message('end_turn', [{ type: 'text', text: 'CHAT' }]),
+      message('end_turn', [{ type: 'text', text: 'Doing great, thanks for asking!' }]),
+    ]);
+    let memoryCalls = 0;
+    const memory: MemoryRetriever = {
+      async retrieve() { memoryCalls += 1; return 'should not be used'; },
+    };
+    const agent = makeAgent({ client, memory, enableFastChat: true });
+
+    const result = await agent.run({ text: 'how are you doing today', source: 'user' });
+
+    assert.equal(result.fastChat, true);
+    assert.match(result.finalText, /Doing great/);
+    assert.equal(result.toolCalls.length, 0);
+    assert.equal(memoryCalls, 0); // memory retrieval is skipped on the fast path
+  });
+
+  it('routes real tasks through the full agent', async () => {
+    const client = new SequenceClient([
+      message('end_turn', [{ type: 'text', text: 'TASK' }]),
+      message('end_turn', [{ type: 'text', text: 'Here is the full answer.' }]),
+    ]);
+    let memoryCalls = 0;
+    const memory: MemoryRetriever = {
+      async retrieve() { memoryCalls += 1; return ''; },
+    };
+    const agent = makeAgent({ client, memory, enableFastChat: true });
+
+    const result = await agent.run({ text: 'search the web for X', source: 'user' });
+
+    assert.ok(!result.fastChat);
+    assert.match(result.finalText, /full answer/);
+    assert.equal(memoryCalls, 1); // the full path retrieves memory
+  });
+
+  it('stays on the full agent for event-sourced runs even when enabled', async () => {
+    const client = new SequenceClient([
+      message('end_turn', [{ type: 'text', text: 'scheduled output' }]),
+    ]);
+    const agent = makeAgent({ client, enableFastChat: true });
+
+    const result = await agent.run({ text: 'daily briefing', source: 'event' });
+
+    assert.ok(!result.fastChat); // no classifier call; the single response is the agent's
+    assert.match(result.finalText, /scheduled output/);
+  });
+});
+
 class SequenceClient implements MessageClient {
   constructor(private readonly responses: Anthropic.Message[]) {}
 
@@ -229,6 +280,7 @@ function makeAgent(overrides: {
   audit?: InMemoryAuditLog;
   registry?: ToolRegistry;
   gate?: ConfirmationGate;
+  enableFastChat?: boolean;
 }): Agent {
   const memory: MemoryRetriever = overrides.memory ?? {
     async retrieve() {
@@ -250,6 +302,7 @@ function makeAgent(overrides: {
     audit: overrides.audit ?? new InMemoryAuditLog(),
     systemPrompt: 'test',
     maxIterations: 2,
+    enableFastChat: overrides.enableFastChat ?? false,
   });
 }
 

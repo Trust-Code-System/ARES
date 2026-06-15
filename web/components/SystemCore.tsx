@@ -20,7 +20,7 @@ export function SystemCore({
   const status = state === 'thinking' ? 'processing' : state === 'halted' ? 'halted' : state;
 
   return (
-    <section className={`relative mx-auto flex w-full max-w-3xl items-center justify-center ${compact ? 'min-h-36' : 'min-h-56 sm:min-h-64'}`}>
+    <section className={`relative mx-auto flex w-full max-w-3xl items-center justify-center ${compact ? 'min-h-32 sm:min-h-36' : 'min-h-48 sm:min-h-64'}`}>
       <div className="absolute left-1/2 top-1/2 h-px w-[min(92vw,660px)] -translate-x-1/2 bg-gradient-to-r from-transparent via-ares-cyan/25 to-transparent" />
       <div className="absolute left-1/2 top-1/2 h-[min(42vw,250px)] w-px -translate-x-1/2 -translate-y-1/2 bg-gradient-to-b from-transparent via-ares-cyan/20 to-transparent" />
       <ArcReactor state={state} size={compact ? 'sm' : 'lg'} />

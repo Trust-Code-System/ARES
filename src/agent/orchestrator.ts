@@ -37,6 +37,25 @@ export interface MessageClient {
   createMessage(params: CreateMessageParams): Promise<Anthropic.Message>;
 }
 
+/** Fast-tier router prompt: classify a user turn as casual chat vs. a real task. */
+const ROUTER_INSTRUCTION =
+  'You are a fast router for the assistant ARES. Decide whether the user\'s latest message '
+  + 'can be answered as casual conversation, or needs the full agent.\n\n'
+  + 'Answer with EXACTLY one word — CHAT or TASK:\n'
+  + '- CHAT: greetings, small talk, pleasantries, thanks, feelings, opinions, or simple '
+  + 'chit-chat that needs no tools, no stored personal facts, and no real-time data.\n'
+  + '- TASK: anything needing tools or actions (web search, email, calendar, files, shell, '
+  + 'code, trading, GitHub), recalling saved facts about the user, real-time or current '
+  + 'information (news, weather, prices, the date/time), or multi-step reasoning.\n'
+  + 'When in doubt, answer TASK.';
+
+/** System guidance for the lightweight conversational reply. */
+const CONVERSATIONAL_INSTRUCTION =
+  'This is a casual, real-time conversation (often spoken aloud). Reply briefly and '
+  + 'naturally — warm, friendly, and human, usually a sentence or two. Do not use markdown '
+  + 'headings, bullet lists, or code formatting, and do not mention tools. If the user '
+  + 'actually needs an action or real information, ask one brief clarifying question.';
+
 export interface AgentOptions {
   client: MessageClient;
   registry: ToolRegistry;
@@ -51,6 +70,12 @@ export interface AgentOptions {
    * facts can be extracted and embedded. Absent in Phase 1 / no-DB mode.
    */
   memoryWriter?: MemoryWriter;
+  /**
+   * Fast conversational path: route casual user small talk to the fast model with
+   * no memory/tools so it answers instantly. Opt-in (default off) — interactive
+   * entry points enable it; batch/event runners and tests leave it off.
+   */
+  enableFastChat?: boolean;
 }
 
 export class Agent {
@@ -76,6 +101,7 @@ export class Agent {
   private async maybeIngest(input: AgentInput, result: AgentRunResult): Promise<void> {
     const writer = this.opts.memoryWriter;
     if (!writer) return;
+    if (result.fastChat) return; // casual small talk carries nothing worth remembering
     if (result.stopReason !== 'completed' && result.stopReason !== 'max_iterations') return;
     if (!result.finalText.trim()) return;
     try {
@@ -120,6 +146,11 @@ export class Agent {
         return this.finish(runId, finalText, 'aborted', iterations, toolCalls, events);
       }
 
+      // 0. Fast path: answer casual small talk on the fast model, skipping memory
+      //    retrieval, tools, and the reasoning model. Returns null for real tasks.
+      const fast = await this.tryFastChat(input, runId, signal, events);
+      if (fast) return fast;
+
       // 1. Retrieve relevant memory and fold it into the system prompt.
       const memoryContext = await this.opts.memory.retrieve(input.text, runId);
       const baseSystem = `${this.opts.systemPrompt}\n\n## Active mode\n${modeInstruction(input.mode)}`;
@@ -128,7 +159,7 @@ export class Agent {
         : baseSystem;
 
       const tools = this.opts.registry.toAnthropicTools();
-      const messages: Anthropic.MessageParam[] = [{ role: 'user', content: input.text }];
+      const messages: Anthropic.MessageParam[] = buildInitialMessages(input);
 
       for (let i = 0; i < this.opts.maxIterations; i++) {
         if (signal?.aborted) {
@@ -342,6 +373,69 @@ export class Agent {
     };
   }
 
+  /**
+   * Lightweight conversational path. For casual user chat in general mode, a quick
+   * fast-tier classifier decides if the turn is small talk; if so we stream a brief
+   * reply on the fast model with no memory retrieval and no tools. Anything needing
+   * tools, memory, real-time data, or a specific mode returns null and falls through
+   * to the full agent. Fail-safe: source/mode guards and a TASK-biased classifier.
+   */
+  private async tryFastChat(
+    input: AgentInput,
+    runId: string,
+    signal: AbortSignal | undefined,
+    events?: AgentEventHandlers,
+  ): Promise<AgentRunResult | null> {
+    if (!this.opts.enableFastChat) return null;
+    if (input.source !== 'user') return null;
+    if (input.mode && input.mode !== 'general') return null;
+
+    let kind: 'chat' | 'task';
+    try {
+      kind = await this.classifyTurn(input, signal);
+    } catch {
+      return null; // classifier failed → use the full agent
+    }
+    if (kind !== 'chat') return null;
+
+    const system = `${this.opts.systemPrompt}\n\n## Conversational mode\n${CONVERSATIONAL_INSTRUCTION}`;
+    const response = await this.opts.client.createMessage({
+      system,
+      messages: buildInitialMessages(input),
+      tools: [],
+      tier: 'fast',
+      maxTokens: 600,
+      ...(signal ? { signal } : {}),
+      ...(events?.onText ? { onText: events.onText } : {}),
+    });
+
+    this.record({
+      runId,
+      ts: new Date().toISOString(),
+      type: 'model_response',
+      detail: { fastChat: true, tier: 'fast', stopReason: response.stop_reason, usage: response.usage },
+    }, events);
+    this.opts.logger.info('fast chat reply', { runId });
+
+    return { ...this.finish(runId, extractText(response.content), 'completed', 1, [], events), fastChat: true };
+  }
+
+  /** One fast-tier call returning 'chat' or 'task'. Ambiguous/empty → 'task' (fail-safe). */
+  private async classifyTurn(input: AgentInput, signal?: AbortSignal): Promise<'chat' | 'task'> {
+    const response = await this.opts.client.createMessage({
+      system: ROUTER_INSTRUCTION,
+      messages: [{ role: 'user', content: input.text }],
+      tools: [],
+      tier: 'fast',
+      maxTokens: 16,
+      ...(signal ? { signal } : {}),
+    });
+    const verdict = extractText(response.content).toLowerCase();
+    if (verdict.includes('task')) return 'task';
+    if (verdict.includes('chat')) return 'chat';
+    return 'task';
+  }
+
   private finish(
     runId: string,
     finalText: string,
@@ -380,6 +474,27 @@ function extractText(content: Anthropic.ContentBlock[]): string {
     .map((b) => b.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * Build the opening message list from any prior history plus the current user
+ * text. The Anthropic API requires messages to start with `user` and strictly
+ * alternate roles, so consecutive same-role turns are merged and any leading
+ * assistant turns are dropped.
+ */
+function buildInitialMessages(input: AgentInput): Anthropic.MessageParam[] {
+  const turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const push = (role: 'user' | 'assistant', raw: string) => {
+    const content = raw.trim();
+    if (!content) return;
+    const last = turns[turns.length - 1];
+    if (last && last.role === role) last.content += `\n\n${content}`;
+    else turns.push({ role, content });
+  };
+  for (const turn of input.history ?? []) push(turn.role, turn.content);
+  push('user', input.text);
+  while (turns.length > 0 && turns[0]!.role !== 'user') turns.shift();
+  return turns.map((turn) => ({ role: turn.role, content: turn.content }));
 }
 
 /** Validate the model's args against the tool's declared `required` list. */

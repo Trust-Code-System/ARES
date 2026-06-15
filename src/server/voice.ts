@@ -27,6 +27,15 @@ export class VoiceNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Default delivery steering for `gpt-4o-mini-tts`. The newer model accepts a
+ * free-text `instructions` field that shapes tone/pacing — we ask for natural,
+ * conversational delivery so ARES sounds like it's speaking, not reading.
+ */
+const DEFAULT_TTS_INSTRUCTIONS =
+  'Speak in a calm, natural, conversational tone — fluent and relaxed, like a helpful '
+  + 'human assistant talking, not reading text aloud. Use natural pacing and intonation.';
+
 export interface OpenAiVoiceOptions {
   apiKey: string;
   /** Speech-to-text model. */
@@ -37,15 +46,18 @@ export interface OpenAiVoiceOptions {
   ttsVoice?: string;
   /** TTS audio container (mp3, opus, aac, flac, wav, pcm). */
   ttsFormat?: string;
+  /** Delivery instructions for steerable models (gpt-4o-mini-tts). */
+  ttsInstructions?: string;
   baseUrl?: string;
   /** Injectable for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 }
 
 /**
- * OpenAI-backed voice provider: `whisper-1` for transcription, `tts-1` for
- * synthesis. Speaks only the {@link VoiceProvider} contract, so the rest of ARES
- * neither knows nor cares that it's OpenAI behind it.
+ * OpenAI-backed voice provider: `whisper-1` for transcription, `gpt-4o-mini-tts`
+ * for synthesis (newer + more natural than `tts-1`, and steerable via delivery
+ * instructions). Speaks only the {@link VoiceProvider} contract, so the rest of
+ * ARES neither knows nor cares that it's OpenAI behind it.
  */
 export class OpenAiVoiceProvider implements VoiceProvider {
   readonly sttProvider = 'openai';
@@ -55,15 +67,17 @@ export class OpenAiVoiceProvider implements VoiceProvider {
   private readonly ttsModel: string;
   private readonly ttsVoice: string;
   private readonly ttsFormat: string;
+  private readonly ttsInstructions: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: OpenAiVoiceOptions) {
     this.apiKey = opts.apiKey;
     this.sttModel = opts.sttModel ?? 'whisper-1';
-    this.ttsModel = opts.ttsModel ?? 'tts-1';
+    this.ttsModel = opts.ttsModel ?? 'gpt-4o-mini-tts';
     this.ttsVoice = opts.ttsVoice ?? 'alloy';
     this.ttsFormat = opts.ttsFormat ?? 'mp3';
+    this.ttsInstructions = opts.ttsInstructions ?? DEFAULT_TTS_INSTRUCTIONS;
     this.baseUrl = opts.baseUrl ?? 'https://api.openai.com/v1';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -89,6 +103,9 @@ export class OpenAiVoiceProvider implements VoiceProvider {
   }
 
   async synthesize(text: string): Promise<{ audio: Buffer; mimeType: string }> {
+    // `instructions` is only honoured by the gpt-4o-mini-tts family; older models
+    // (tts-1/tts-1-hd) reject unknown params, so only send it for gpt-4o models.
+    const steerable = this.ttsModel.startsWith('gpt-4o');
     const res = await this.fetchImpl(`${this.baseUrl}/audio/speech`, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
@@ -97,6 +114,7 @@ export class OpenAiVoiceProvider implements VoiceProvider {
         voice: this.ttsVoice,
         input: text,
         response_format: this.ttsFormat,
+        ...(steerable && this.ttsInstructions ? { instructions: this.ttsInstructions } : {}),
       }),
     });
     if (!res.ok) {
@@ -281,11 +299,22 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
   }
 }
 
+/**
+ * Default delivery steering for Gemini TTS. Gemini reads a natural-language style
+ * instruction prefixed to the prompt (it speaks only the content after it), so we
+ * ask for fluent, conversational delivery rather than a flat read.
+ */
+const DEFAULT_GEMINI_TTS_STYLE =
+  'Say the following in a calm, natural, conversational tone — fluent and relaxed, like a '
+  + 'helpful human assistant speaking, not reading text aloud, with natural pacing and intonation:';
+
 export interface GeminiTextToSpeechOptions {
   apiKey: string;
   model?: string;
   /** Prebuilt Gemini voice name (e.g. Kore, Puck, Charon, Aoede). */
   voice?: string;
+  /** Natural-language delivery style prefixed to the prompt. */
+  style?: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
@@ -301,24 +330,29 @@ export class GeminiTextToSpeechProvider implements TextToSpeechProvider {
   readonly name = 'gemini';
   private readonly model: string;
   private readonly voice: string;
+  private readonly style: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: GeminiTextToSpeechOptions) {
     this.model = opts.model ?? 'gemini-2.5-flash-preview-tts';
     this.voice = opts.voice ?? 'Kore';
+    this.style = opts.style ?? DEFAULT_GEMINI_TTS_STYLE;
     this.baseUrl = opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
   async synthesize(text: string): Promise<{ audio: Buffer; mimeType: string }> {
+    // Gemini speaks only the content after the style instruction, so prefixing it
+    // steers delivery toward natural, conversational speech.
+    const prompt = this.style ? `${this.style}\n\n${text}` : text;
     const res = await this.fetchImpl(
       `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`,
       {
         method: 'POST',
         headers: { 'x-goog-api-key': this.opts.apiKey, 'content-type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text }] }],
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voice } } },
@@ -444,6 +478,7 @@ function selectTts(
           apiKey: geminiKey,
           ...(env.ARES_GEMINI_TTS_MODEL ? { model: env.ARES_GEMINI_TTS_MODEL } : {}),
           ...(env.ARES_GEMINI_TTS_VOICE ? { voice: env.ARES_GEMINI_TTS_VOICE } : {}),
+          ...(env.ARES_GEMINI_TTS_STYLE ? { style: env.ARES_GEMINI_TTS_STYLE } : {}),
         })
       : undefined;
   const openai = (): TextToSpeechProvider | undefined =>
@@ -464,6 +499,7 @@ function openAiOptions(env: NodeJS.ProcessEnv, apiKey: string): OpenAiVoiceOptio
     ...(env.ARES_VOICE_TTS_MODEL ? { ttsModel: env.ARES_VOICE_TTS_MODEL } : {}),
     ...(env.ARES_VOICE_TTS_VOICE ? { ttsVoice: env.ARES_VOICE_TTS_VOICE } : {}),
     ...(env.ARES_VOICE_TTS_FORMAT ? { ttsFormat: env.ARES_VOICE_TTS_FORMAT } : {}),
+    ...(env.ARES_VOICE_TTS_INSTRUCTIONS ? { ttsInstructions: env.ARES_VOICE_TTS_INSTRUCTIONS } : {}),
     ...(env.OPENAI_BASE_URL ? { baseUrl: env.OPENAI_BASE_URL } : {}),
   };
 }

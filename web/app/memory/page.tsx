@@ -104,7 +104,7 @@ export default function MemoryBrowser() {
   }
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-[1600px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8">
       <PageHeader title="Memory browser" subtitle="Inspect, curate, and probe everything ARES remembers" />
 
       {error && (
@@ -123,12 +123,12 @@ export default function MemoryBrowser() {
               void rememberFact();
             }}
           >
-            <div className="flex gap-2">
+            <div className="grid gap-2 sm:flex">
               <select
                 aria-label="Memory type"
                 value={memoryKind}
                 onChange={(event) => setMemoryKind(event.target.value as FactKind)}
-                className="border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase text-ares-amber outline-none"
+                className="h-10 border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase text-ares-amber outline-none"
               >
                 {FACT_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
               </select>
@@ -153,7 +153,7 @@ export default function MemoryBrowser() {
           </form>
 
           <form
-            className="mb-3 flex gap-2"
+            className="mb-3 grid gap-2 sm:flex"
             onSubmit={(event) => {
               event.preventDefault();
               void refresh(factQuery);
@@ -182,12 +182,12 @@ export default function MemoryBrowser() {
                     void saveEdit(fact);
                   }}
                 >
-                  <div className="flex gap-2">
+                  <div className="grid gap-2 sm:flex">
                     <select
                       aria-label="Edit memory type"
                       value={editKind}
                       onChange={(event) => setEditKind(event.target.value as FactKind)}
-                      className="border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase text-ares-cyan outline-none"
+                      className="h-10 border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase text-ares-cyan outline-none"
                     >
                       {FACT_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
                     </select>
@@ -219,7 +219,7 @@ export default function MemoryBrowser() {
                 </form>
               ) : (
                 <article key={fact.id} className="border-l border-ares-amber/50 bg-black/20 px-3 py-2">
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-ares-amber">{fact.kind}</span>
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-[9px] text-ares-muted">IMP {fact.importance}</span>
@@ -252,7 +252,7 @@ export default function MemoryBrowser() {
 
         <HudPanel title="Semantic memory probe" code="VEC-02" className="xl:col-span-7">
           <form
-            className="mb-4 flex gap-2"
+            className="mb-4 grid gap-2 sm:flex"
             onSubmit={(event) => {
               event.preventDefault();
               void searchSemantic();

@@ -7,7 +7,7 @@ interface ArcReactorProps {
 
 const sizes = {
   sm: 'h-28 w-28',
-  lg: 'h-44 w-44 sm:h-52 sm:w-52',
+  lg: 'h-36 w-36 sm:h-52 sm:w-52',
 };
 
 export function ArcReactor({ state, size = 'lg' }: ArcReactorProps) {
@@ -35,7 +35,35 @@ export function ArcReactor({ state, size = 'lg' }: ArcReactorProps) {
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+          <linearGradient id={`sweep-${size}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="var(--reactor-color)" stopOpacity="0" />
+            <stop offset="100%" stopColor="var(--reactor-color)" stopOpacity="0.4" />
+          </linearGradient>
         </defs>
+
+        {/* Radar sweep — a faint sector that rotates around the core. */}
+        <path
+          className="reactor-sweep"
+          d="M120 120 L120 22 A98 98 0 0 1 183 45 Z"
+          fill={`url(#sweep-${size})`}
+        />
+
+        {/* Tick ring just inside the rotating dashes. */}
+        <g stroke="var(--reactor-color)" strokeOpacity="0.4" strokeWidth="1.4">
+          {Array.from({ length: 36 }).map((_, i) => {
+            const a = (i * 10 * Math.PI) / 180;
+            const inner = i % 3 === 0 ? 104 : 110;
+            return (
+              <line
+                key={i}
+                x1={120 + inner * Math.cos(a)}
+                y1={120 + inner * Math.sin(a)}
+                x2={120 + 114 * Math.cos(a)}
+                y2={120 + 114 * Math.sin(a)}
+              />
+            );
+          })}
+        </g>
 
         <g fill="none" stroke="var(--reactor-color)">
           <circle cx="120" cy="120" r="108" strokeOpacity="0.18" strokeWidth="1" />

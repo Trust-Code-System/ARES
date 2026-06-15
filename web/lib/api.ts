@@ -6,6 +6,7 @@
 export const API_BASE = process.env.NEXT_PUBLIC_ARES_API ?? 'http://localhost:3001';
 
 const SESSION_STORAGE_KEY = 'ares.session';
+const REMEMBERED_KEY_STORAGE = 'ares.apikey';
 
 /** Thrown when the server requires auth and the current credential is missing/invalid. */
 export class UnauthorizedError extends Error {
@@ -34,10 +35,28 @@ export function authHeaders(): Record<string, string> {
 }
 
 /**
- * Exchange the API key for a session token and persist it. Throws
- * UnauthorizedError when the key is rejected.
+ * The API key remembered on this device, if the user opted in. Storing the master
+ * key locally is a convenience/security trade-off — it lets ARES silently re-open a
+ * session after the server restarts (which wipes in-memory sessions) instead of
+ * re-prompting — so it is strictly opt-in via {@link login}'s `remember` flag.
  */
-export async function login(key: string): Promise<void> {
+export function getRememberedKey(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(REMEMBERED_KEY_STORAGE);
+}
+
+function setRememberedKey(key: string | null): void {
+  if (typeof window === 'undefined') return;
+  if (key) window.localStorage.setItem(REMEMBERED_KEY_STORAGE, key);
+  else window.localStorage.removeItem(REMEMBERED_KEY_STORAGE);
+}
+
+/**
+ * Exchange the API key for a session token and persist it. When `remember` is set,
+ * the key itself is stored so the session can be silently re-established later.
+ * Throws UnauthorizedError when the key is rejected.
+ */
+export async function login(key: string, remember = false): Promise<void> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -47,15 +66,41 @@ export async function login(key: string): Promise<void> {
   if (!res.ok) throw new Error(`login failed (${res.status})`);
   const { token } = (await res.json()) as { token: string };
   setSessionToken(token);
+  setRememberedKey(remember ? key : null);
 }
 
-/** Best-effort logout: invalidate the session server-side and clear it locally. */
+/**
+ * Ensure there's a usable session without prompting: if the current token probe
+ * fails but a key is remembered on this device, silently re-login with it. Returns
+ * true when a session is active afterwards. A stale remembered key is cleared so we
+ * don't loop on it.
+ */
+export async function ensureSession(): Promise<boolean> {
+  try {
+    await api.status();
+    return true;
+  } catch (caught) {
+    if (!(caught instanceof UnauthorizedError)) return true; // server down → let app's offline UI handle it
+  }
+  const remembered = getRememberedKey();
+  if (!remembered) return false;
+  try {
+    await login(remembered, true);
+    return true;
+  } catch {
+    setRememberedKey(null);
+    return false;
+  }
+}
+
+/** Best-effort logout: invalidate the session server-side and clear it (and any remembered key) locally. */
 export async function logout(): Promise<void> {
   const token = getSessionToken();
   if (token) {
     await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', headers: authHeaders() }).catch(() => {});
   }
   setSessionToken(null);
+  setRememberedKey(null);
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -203,12 +248,21 @@ export async function streamChat(
     onDone?: (done: ChatDone) => void;
     onError?: (message: string) => void;
   },
-  options?: { mode?: AssistantMode },
+  options?: {
+    mode?: AssistantMode;
+    signal?: AbortSignal;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  },
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ text, ...(options?.mode ? { mode: options.mode } : {}) }),
+    body: JSON.stringify({
+      text,
+      ...(options?.mode ? { mode: options.mode } : {}),
+      ...(options?.history?.length ? { history: options.history } : {}),
+    }),
+    signal: options?.signal,
   });
   if (res.status === 401) {
     setSessionToken(null);

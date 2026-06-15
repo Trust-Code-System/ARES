@@ -62,7 +62,7 @@ export default function ToolSettings() {
   const pendingHints = ENV_HINTS.filter((hint) => hint.when(runtime));
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-[1600px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8">
       <PageHeader title="Tool settings" subtitle="Enable capabilities, review risk levels, and connector status" />
 
       {error && (
@@ -86,7 +86,7 @@ export default function ToolSettings() {
             {tools.map((tool) => (
               <label
                 key={tool.name}
-                className="group flex cursor-pointer items-center gap-3 border border-ares-line bg-black/20 p-3 transition hover:border-ares-cyan/40 hover:bg-ares-cyan/[0.04]"
+                className="group flex min-w-0 cursor-pointer items-center gap-2 border border-ares-line bg-black/20 p-3 transition hover:border-ares-cyan/40 hover:bg-ares-cyan/[0.04] sm:gap-3"
               >
                 <input
                   type="checkbox"
@@ -102,7 +102,7 @@ export default function ToolSettings() {
                   <span className="block truncate font-mono text-xs text-slate-200">{tool.name}</span>
                   <span className="mt-1 block truncate text-[10px] text-ares-muted">{tool.description}</span>
                 </span>
-                <span className={`font-mono text-[9px] uppercase tracking-wider ${tool.kind === 'state_mutating' ? 'text-ares-amber' : 'text-ares-cyan'}`}>
+                <span className={`shrink-0 font-mono text-[8px] uppercase tracking-wider sm:text-[9px] ${tool.kind === 'state_mutating' ? 'text-ares-amber' : 'text-ares-cyan'}`}>
                   {tool.kind === 'state_mutating' ? 'gated' : 'read'}
                 </span>
               </label>

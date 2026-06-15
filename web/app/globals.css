@@ -15,6 +15,7 @@
 
 html {
   background: #02060a;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -89,7 +90,7 @@ body::after {
   }
 
   .hud-button {
-    @apply relative overflow-hidden border border-ares-cyan/40 bg-ares-cyan/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ares-cyan transition;
+    @apply relative min-h-10 overflow-hidden border border-ares-cyan/40 bg-ares-cyan/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ares-cyan transition;
   }
 
   .hud-button:hover:not(:disabled) {
@@ -107,6 +108,7 @@ body::after {
 
   .hud-input {
     @apply border border-ares-line bg-black/40 font-mono text-sm text-slate-100 outline-none transition placeholder:text-ares-muted/70;
+    font-size: 16px;
   }
 
   .hud-input:focus {
@@ -141,6 +143,19 @@ body::after {
 
   .telemetry-line {
     background: linear-gradient(90deg, transparent, rgba(0, 217, 255, 0.65), transparent);
+  }
+}
+
+@media (min-width: 640px) {
+  .hud-input {
+    font-size: 0.875rem;
+  }
+}
+
+@supports (padding: max(0px)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 }
 
@@ -197,6 +212,79 @@ body::after {
 
 .reactor-error {
   animation: hud-flicker 0.65s steps(2) infinite;
+}
+
+.reactor-sweep {
+  transform-box: fill-box;
+  transform-origin: 0 0; /* path's M120 120 anchor = reactor centre */
+  animation: hud-spin 6s linear infinite;
+  mix-blend-mode: screen;
+}
+
+.reactor-thinking .reactor-sweep {
+  animation-duration: 2.4s;
+}
+
+.reactor-offline .reactor-sweep,
+.reactor-halted .reactor-sweep {
+  animation-play-state: paused;
+}
+
+.circuit-pulse {
+  stroke-dasharray: 14 86;
+  stroke-dashoffset: 100;
+  animation: hud-flow 4.5s linear infinite;
+}
+
+.circuit-pulse-delayed {
+  animation-delay: 1.6s;
+  animation-duration: 5.2s;
+}
+
+.circuit-pulse-slow {
+  animation-delay: 0.8s;
+  animation-duration: 6.5s;
+}
+
+@keyframes hud-flow {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.voicewave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+}
+
+.voicewave span {
+  width: 2px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--hud-cyan);
+  box-shadow: 0 0 6px rgba(0, 217, 255, 0.7);
+  opacity: 0.45;
+  transform: scaleY(0.16);
+  transform-origin: bottom;
+  transition: transform 0.2s ease;
+}
+
+.voicewave-active span {
+  opacity: 1;
+  animation: hud-wave 0.85s ease-in-out infinite;
+}
+
+/* Animate transform (compositor-only) rather than height to avoid layout. */
+@keyframes hud-wave {
+  0%,
+  100% {
+    transform: scaleY(0.14);
+  }
+  50% {
+    transform: scaleY(var(--peak, 0.9));
+  }
 }
 
 .thinking-shimmer {

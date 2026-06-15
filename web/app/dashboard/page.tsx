@@ -95,7 +95,7 @@ export default function Dashboard() {
   const enabledTools = tools.filter((tool) => tool.enabled).length;
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-[1600px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8">
       <div className="grid items-center gap-5 xl:grid-cols-[1fr_1.4fr_1fr]">
         <div className="hidden xl:block">
           <MetricStack
@@ -201,7 +201,7 @@ export default function Dashboard() {
         </HudPanel>
 
         <HudPanel title="Capability summary" code="CAP-20" className="xl:col-span-12">
-          <div className="mb-4 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
+          <div className="mb-4 grid grid-cols-1 gap-2 font-mono text-[10px] uppercase tracking-[0.14em] sm:flex sm:flex-wrap">
             <Link href="/memory" className="border border-ares-line px-3 py-2 text-ares-muted transition hover:border-ares-cyan/40 hover:text-ares-cyan">
               Memory browser →
             </Link>
@@ -241,7 +241,7 @@ export default function Dashboard() {
 
         <HudPanel title={`Task queue / ${tasks.length}`} code="TSK-03" accent="amber" className="xl:col-span-7">
           <form
-            className="mb-4 flex gap-2"
+            className="mb-4 grid gap-2 sm:flex"
             onSubmit={(event) => {
               event.preventDefault();
               void addTask();
@@ -256,12 +256,12 @@ export default function Dashboard() {
               onChange={(event) => setNewTaskTitle(event.target.value)}
               disabled={mutating}
             />
-            <button type="submit" className="hud-button" disabled={mutating || !newTaskTitle.trim()}>Add</button>
+            <button type="submit" className="hud-button sm:w-auto" disabled={mutating || !newTaskTitle.trim()}>Add</button>
           </form>
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
             {tasks.length === 0 && <EmptyState text="No tasks tracked" />}
             {tasks.map((task) => (
-              <div key={task.id} className="flex items-center gap-3 border-l-2 border-ares-amber/50 bg-black/20 px-3 py-2">
+              <div key={task.id} className="flex flex-wrap items-center gap-2 border-l-2 border-ares-amber/50 bg-black/20 px-3 py-2 sm:flex-nowrap sm:gap-3">
                 <button
                   type="button"
                   title="Cycle status"
@@ -271,7 +271,7 @@ export default function Dashboard() {
                 >
                   {task.status.replace('_', ' ')}
                 </button>
-                <span className={`min-w-0 flex-1 truncate text-sm ${task.status === 'done' || task.status === 'cancelled' ? 'text-ares-muted line-through' : 'text-slate-200'}`}>
+                <span className={`min-w-0 flex-1 basis-[60%] break-words text-sm sm:truncate ${task.status === 'done' || task.status === 'cancelled' ? 'text-ares-muted line-through' : 'text-slate-200'}`}>
                   {task.title}
                   {task.priority !== 'normal' && (
                     <span className="ml-2 font-mono text-[9px] uppercase tracking-wider text-ares-amber">{task.priority}</span>

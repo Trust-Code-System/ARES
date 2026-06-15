@@ -134,7 +134,23 @@ describe('OpenAiVoiceProvider', () => {
     assert.equal(audio.toString(), 'MP3DATA');
     assert.equal(payload?.input, 'hello there');
     assert.equal(payload?.voice, 'nova');
+    assert.equal(payload?.model, 'gpt-4o-mini-tts');
+    // The steerable model carries delivery instructions for natural speech.
+    assert.equal(typeof payload?.instructions, 'string');
+  });
+
+  it('omits instructions for the legacy tts-1 model', async () => {
+    let payload: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(Buffer.from('MP3DATA'), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAiVoiceProvider({ apiKey: 'sk-x', ttsModel: 'tts-1', fetchImpl });
+    await provider.synthesize('hello there');
+
     assert.equal(payload?.model, 'tts-1');
+    assert.equal(payload?.instructions, undefined);
   });
 
   it('throws on a non-2xx response', async () => {
@@ -181,6 +197,10 @@ describe('Gemini and ElevenLabs voice providers', () => {
     assert.equal(audio.readUInt32LE(24), 24000); // sample rate parsed from mime
     const gen = payload?.generationConfig as Record<string, unknown>;
     assert.deepEqual(gen.responseModalities, ['AUDIO']);
+    // Delivery is steered by a style instruction prefixed to the spoken content.
+    const promptText = (payload?.contents as Array<{ parts: Array<{ text: string }> }>)[0]!.parts[0]!.text;
+    assert.match(promptText, /conversational tone/);
+    assert.match(promptText, /hello$/);
   });
 
   it('throws when Gemini returns no audio', async () => {

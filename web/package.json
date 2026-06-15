@@ -5,6 +5,7 @@
   "description": "ARES Phase 5 — Next.js chat UI + dashboard. Talks to the ARES API server (npm run serve).",
   "scripts": {
     "dev": "next dev -p 3000",
+    "dev:clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint"

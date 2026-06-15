@@ -161,6 +161,12 @@ export interface AgentInput {
   source: 'user' | 'event';
   /** Specialist guidance profile. It changes behavior, never permissions. */
   mode?: AssistantMode;
+  /**
+   * Prior conversation turns, oldest first, so the model has multi-turn context.
+   * Text-only (no tool blocks); the orchestrator normalizes them into a valid
+   * alternating user/assistant transcript before the current {@link text}.
+   */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
 export type AssistantMode =
@@ -196,4 +202,6 @@ export interface AgentRunResult {
   iterations: number;
   /** Tool calls executed, in order. */
   toolCalls: Array<{ name: string; ok: boolean }>;
+  /** True when answered via the lightweight conversational fast path (no tools/memory). */
+  fastChat?: boolean;
 }

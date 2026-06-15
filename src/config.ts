@@ -48,6 +48,8 @@ export interface Config {
   geminiReasoningModel: string;
   geminiFastModel: string;
   maxIterations: number;
+  /** Route casual small talk to the fast model (no tools/memory). Default on. */
+  enableFastChat: boolean;
   confirmationMode: ConfirmationMode;
   // --- API auth (Phase 5 hardening) ---
   /** Shared API key for the HTTP control plane. Absent → auth disabled (dev only). */
@@ -178,6 +180,7 @@ export function loadConfig(): Config {
     geminiReasoningModel: process.env.ARES_GEMINI_REASONING_MODEL ?? 'gemini-3.5-flash',
     geminiFastModel: process.env.ARES_GEMINI_FAST_MODEL ?? 'gemini-3.1-flash-lite',
     maxIterations,
+    enableFastChat: !['false', '0', 'off', 'no'].includes((process.env.ARES_FAST_CHAT ?? '').toLowerCase()),
     confirmationMode: mode,
     ...(apiKey ? { apiKey } : {}),
     sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,

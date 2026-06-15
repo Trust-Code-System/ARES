@@ -167,6 +167,10 @@ export class ApiServer {
   }
 
   private async streamChat(body: unknown, res: ServerResponse): Promise<void> {
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
@@ -180,13 +184,13 @@ export class ApiServer {
       res.end();
       return;
     }
-    const { text, mode } = parsed.data;
+    const { text, mode, history } = parsed.data;
 
     send('start', { text, mode: mode ?? 'general' });
     const liveEvents: unknown[] = [];
     const result = await this.opts.deps.agent.run(
-      { text, source: 'user', ...(mode ? { mode } : {}) },
-      undefined,
+      { text, source: 'user', ...(mode ? { mode } : {}), ...(history ? { history } : {}) },
+      controller.signal,
       {
         onText: (token) => send('token', { token }),
         onAudit: (event) => {
@@ -195,6 +199,7 @@ export class ApiServer {
         },
       },
     );
+    if (controller.signal.aborted) return;
     send('done', {
       runId: result.runId,
       stopReason: result.stopReason,

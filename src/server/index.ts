@@ -111,6 +111,7 @@ async function main(): Promise<void> {
     audit: memory.audit,
     systemPrompt: SYSTEM_PROMPT,
     maxIterations: config.maxIterations,
+    enableFastChat: config.enableFastChat,
   });
 
   const voice = buildVoiceProvider();
