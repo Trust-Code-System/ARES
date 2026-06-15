@@ -1,0 +1,46 @@
+{
+  "name": "ares",
+  "version": "0.1.0",
+  "description": "ARES — Autonomous Reasoning & Execution System. Phase 2: agent loop + tools + persistent memory.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "ask": "tsx src/index.ts",
+    "migrate": "tsx src/db/migrate.ts",
+    "consolidate": "tsx src/scripts/consolidate.ts",
+    "control": "tsx src/scripts/control.ts",
+    "autonomous": "tsx src/scripts/autonomous.ts",
+    "scheduler": "tsx src/scripts/scheduler.ts",
+    "serve": "tsx src/server/index.ts",
+    "desktop": "node desktop/launcher.mjs",
+    "desktop:setup": "node desktop/launcher.mjs setup",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@google/genai": "^2.8.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "bullmq": "^5.78.1",
+    "cron-parser": "^5.5.0",
+    "dotenv": "^17.4.2",
+    "mammoth": "^1.12.0",
+    "openai": "^6.42.0",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.21.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

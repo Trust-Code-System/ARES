@@ -1,0 +1,110 @@
+/** Assembles the default tool registry. Add new tools here (see README). */
+
+import { ToolRegistry } from './registry.js';
+import type { Tool } from '../types.js';
+import { getCurrentTime } from './builtin/getCurrentTime.js';
+import { calculate } from './builtin/calculate.js';
+import { createNotifyTool } from './builtin/notify.js';
+import { createFileTools } from './builtin/files.js';
+import { createTaskTools } from './builtin/tasks.js';
+import { webFetch } from './builtin/webFetch.js';
+import { createWebSearchTool, type SearchProvider } from './builtin/webSearch.js';
+import { createShellTool, type ShellToolOptions } from './builtin/shell.js';
+import { createTradingTools, type BrokerProvider } from './builtin/trading.js';
+import { createMemoryTools } from './builtin/memory.js';
+import type { StructuredStore } from '../memory/stores.js';
+import { createPythonTool, type PythonToolOptions } from './builtin/python.js';
+import { createSystemActionTools } from './builtin/systemActions.js';
+import { createDocumentTools } from './builtin/documents.js';
+import type { VisionExtractor } from '../llm/vision.js';
+import type { NotificationStore } from '../notifications/store.js';
+import type { TaskStore } from '../tasks/store.js';
+
+export interface RegistryOptions {
+  /** Workspace root the file tools are jailed to. */
+  workspaceDir: string;
+  /** Optional web-search backend. web_search is registered only when present. */
+  searchProvider?: SearchProvider;
+  /** Sandboxed shell tool config. Registered only when `enabled` is true. */
+  shell?: { enabled: boolean } & Omit<ShellToolOptions, 'workspaceDir'>;
+  /** Dedicated Python tool config. Registered only when `enabled` is true. */
+  python?: { enabled: boolean } & Omit<PythonToolOptions, 'workspaceDir'>;
+  /** Cross-platform approved application and URL launch tools. */
+  systemActionsEnabled?: boolean;
+  /** Optional broker backend. Trading tools are registered only when present. */
+  tradingProvider?: BrokerProvider;
+  /** Structured memory tools. Present in normal runtime, optional in isolated tests. */
+  structuredStore?: StructuredStore;
+  /**
+   * Vision extractor (Claude) for document image OCR. When present, the
+   * `extract_image_text` tool is registered; absent, it's omitted.
+   */
+  visionExtractor?: VisionExtractor;
+  /** Notification history store. When present, `notify` records every delivery. */
+  notificationStore?: NotificationStore;
+  /** Task store. When present, the create_task/list_tasks/update_task tools are registered. */
+  taskStore?: TaskStore;
+  /** Additional tools to register (e.g. tools imported from MCP servers). */
+  extraTools?: Tool[];
+}
+
+export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
+  const registry = new ToolRegistry()
+    .register(getCurrentTime)
+    .register(calculate)
+    .register(createNotifyTool(opts.notificationStore ? { store: opts.notificationStore } : {}))
+    .register(webFetch);
+
+  for (const tool of createFileTools(opts.workspaceDir)) registry.register(tool);
+
+  for (const tool of createDocumentTools({
+    workspaceDir: opts.workspaceDir,
+    ...(opts.visionExtractor ? { vision: opts.visionExtractor } : {}),
+  })) {
+    registry.register(tool);
+  }
+
+  if (opts.searchProvider) registry.register(createWebSearchTool(opts.searchProvider));
+
+  if (opts.shell?.enabled) {
+    registry.register(
+      createShellTool({
+        workspaceDir: opts.workspaceDir,
+        allowlist: opts.shell.allowlist,
+        timeoutMs: opts.shell.timeoutMs,
+        maxOutputBytes: opts.shell.maxOutputBytes,
+      }),
+    );
+  }
+
+  if (opts.python?.enabled) {
+    registry.register(createPythonTool({
+      workspaceDir: opts.workspaceDir,
+      command: opts.python.command,
+      timeoutMs: opts.python.timeoutMs,
+      maxOutputBytes: opts.python.maxOutputBytes,
+    }));
+  }
+
+  if (opts.systemActionsEnabled) {
+    for (const tool of createSystemActionTools()) registry.register(tool);
+  }
+
+  if (opts.tradingProvider) {
+    for (const tool of createTradingTools(opts.tradingProvider)) registry.register(tool);
+  }
+
+  if (opts.structuredStore) {
+    for (const tool of createMemoryTools(opts.structuredStore)) registry.register(tool);
+  }
+
+  if (opts.taskStore) {
+    for (const tool of createTaskTools(opts.taskStore)) registry.register(tool);
+  }
+
+  for (const tool of opts.extraTools ?? []) registry.register(tool);
+
+  return registry;
+}
+
+export { ToolRegistry } from './registry.js';

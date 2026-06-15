@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --hud-cyan: #00d9ff;
+  --hud-amber: #ff9f1c;
+  --hud-red: #ff3b4f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #02060a;
+}
+
+body {
+  @apply min-h-screen overflow-x-hidden bg-ares-bg text-slate-100 antialiased;
+  background-image:
+    radial-gradient(circle at 50% -20%, rgba(0, 217, 255, 0.14), transparent 35%),
+    radial-gradient(circle at 88% 35%, rgba(255, 159, 28, 0.05), transparent 25%);
+  font-family: "Segoe UI", "Arial Narrow", Arial, sans-serif;
+}
+
+body::before,
+body::after {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  content: "";
+}
+
+body::before {
+  background-image:
+    linear-gradient(rgba(0, 217, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 217, 255, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 90%);
+  animation: hud-grid 12s linear infinite;
+}
+
+body::after {
+  z-index: 30;
+  opacity: 0.18;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 3px,
+    rgba(0, 0, 0, 0.28) 4px
+  );
+}
+
+::selection {
+  color: #02060a;
+  background: rgba(0, 217, 255, 0.9);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 217, 255, 0.42) rgba(2, 6, 10, 0.6);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(2, 6, 10, 0.6);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid #02060a;
+  border-radius: 999px;
+  background: rgba(0, 217, 255, 0.42);
+}
+
+@layer components {
+  .hud-label {
+    @apply font-mono text-[10px] font-medium uppercase tracking-[0.24em] text-ares-muted;
+  }
+
+  .hud-value {
+    @apply font-mono text-xs uppercase tracking-[0.12em] text-ares-cyanSoft;
+  }
+
+  .hud-button {
+    @apply relative overflow-hidden border border-ares-cyan/40 bg-ares-cyan/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-ares-cyan transition;
+  }
+
+  .hud-button:hover:not(:disabled) {
+    @apply border-ares-cyan bg-ares-cyan/20 text-white shadow-hud-cyan;
+  }
+
+  .hud-button:focus-visible,
+  .hud-input:focus-visible {
+    @apply outline-none ring-2 ring-ares-cyan/60 ring-offset-2 ring-offset-ares-bg;
+  }
+
+  .hud-button:disabled {
+    @apply cursor-not-allowed opacity-40;
+  }
+
+  .hud-input {
+    @apply border border-ares-line bg-black/40 font-mono text-sm text-slate-100 outline-none transition placeholder:text-ares-muted/70;
+  }
+
+  .hud-input:focus {
+    @apply border-ares-cyan/70 shadow-hud-cyan;
+  }
+
+  .hud-panel {
+    @apply relative border border-ares-line/90 bg-ares-panel/80 shadow-hud-cyan backdrop-blur-sm;
+    clip-path: polygon(0 12px, 12px 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 0 100%);
+  }
+
+  .hud-panel::before,
+  .hud-panel::after {
+    position: absolute;
+    width: 38px;
+    height: 2px;
+    pointer-events: none;
+    content: "";
+    background: var(--hud-cyan);
+    box-shadow: 0 0 10px rgba(0, 217, 255, 0.75);
+  }
+
+  .hud-panel::before {
+    top: -1px;
+    left: 12px;
+  }
+
+  .hud-panel::after {
+    right: 0;
+    bottom: -1px;
+  }
+
+  .telemetry-line {
+    background: linear-gradient(90deg, transparent, rgba(0, 217, 255, 0.65), transparent);
+  }
+}
+
+.reactor {
+  --reactor-color: var(--hud-cyan);
+  position: relative;
+  filter: drop-shadow(0 0 13px color-mix(in srgb, var(--reactor-color) 65%, transparent));
+}
+
+.reactor-thinking {
+  --reactor-color: #7cecff;
+}
+
+.reactor-halted,
+.reactor-error {
+  --reactor-color: var(--hud-red);
+}
+
+.reactor-offline {
+  --reactor-color: #7394a3;
+}
+
+.reactor-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.reactor-outer {
+  animation: hud-spin 18s linear infinite;
+}
+
+.reactor-middle {
+  animation: hud-spin-reverse 12s linear infinite;
+}
+
+.reactor-core {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hud-pulse 2.8s ease-in-out infinite;
+}
+
+.reactor-thinking .reactor-outer {
+  animation-duration: 4s;
+}
+
+.reactor-thinking .reactor-middle {
+  animation-duration: 3s;
+}
+
+.reactor-thinking .reactor-core,
+.reactor-error .reactor-core {
+  animation-duration: 0.9s;
+}
+
+.reactor-error {
+  animation: hud-flicker 0.65s steps(2) infinite;
+}
+
+.thinking-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(0, 217, 255, 0.3),
+    #d9fbff,
+    rgba(0, 217, 255, 0.3)
+  );
+  background-size: 200% 100%;
+  color: transparent;
+  background-clip: text;
+  animation: hud-shimmer 2.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
