@@ -72,7 +72,7 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface AuditEvent { runId: string; ts: string; type: string; detail: Record<string, unknown>; }
-export interface ActivityRecord { id: string; trigger: string; status: string; detail: string; startedAt: string; finishedAt: string | null; }
+export interface ActivityRecord { id: string; trigger: string; status: string; detail: string; runId: string | null; startedAt: string; finishedAt: string | null; }
 export interface ToolInfo { name: string; kind: string; description: string; enabled: boolean; }
 export interface KillSwitchState { engaged: boolean; reason: string | null; changedAt: string; changedBy: string | null; }
 export interface Confirmation { id: string; tool: string; input: unknown; reason: string; createdAt: string; }

@@ -31,7 +31,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 Interface
               </Link>
               <Link href="/dashboard" className="border border-transparent px-3 py-2 text-ares-muted transition hover:border-ares-amber/30 hover:text-ares-amber">
-                Systems
+                Dashboard
+              </Link>
+              <Link href="/memory" className="border border-transparent px-3 py-2 text-ares-muted transition hover:border-ares-cyan/30 hover:text-ares-cyan">
+                Memory
+              </Link>
+              <Link href="/activity" className="border border-transparent px-3 py-2 text-ares-muted transition hover:border-ares-cyan/30 hover:text-ares-cyan">
+                Activity
+              </Link>
+              <Link href="/tools" className="border border-transparent px-3 py-2 text-ares-muted transition hover:border-ares-cyan/30 hover:text-ares-cyan">
+                Tools
               </Link>
             </nav>
             <div className="telemetry-line absolute bottom-0 left-0 h-px w-full" />
