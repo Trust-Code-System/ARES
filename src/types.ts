@@ -162,6 +162,12 @@ export interface AgentInput {
   /** Specialist guidance profile. It changes behavior, never permissions. */
   mode?: AssistantMode;
   /**
+   * Per-turn model selection from the UI: `auto` (classify and pick the speed tier),
+   * `fast`/`smart`, or `<provider>:<tier>` (e.g. `openai:fast`). Parsed by
+   * {@link parseModelChoice}; an unknown/absent value behaves as `auto`.
+   */
+  model?: string;
+  /**
    * Prior conversation turns, oldest first, so the model has multi-turn context.
    * Text-only (no tool blocks); the orchestrator normalizes them into a valid
    * alternating user/assistant transcript before the current {@link text}.

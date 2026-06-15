@@ -162,10 +162,17 @@ export interface ExtractedUpload {
   text: string;
   truncated: boolean;
 }
+export interface ModelOption {
+  id: string;
+  label: string;
+  detail: string;
+}
 export interface RuntimeStatus {
   provider: 'anthropic' | 'openai' | 'gemini';
   model: string;
   fastModel: string;
+  /** Selectable model options for the HUD switch (`auto` + per-provider tiers). May be empty. */
+  modelOptions?: ModelOption[];
   voiceEnabled: boolean;
   voiceInputProvider: string | null;
   voiceOutputProvider: string | null;
@@ -269,6 +276,7 @@ export async function streamChat(
   },
   options?: {
     mode?: AssistantMode;
+    model?: string;
     signal?: AbortSignal;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   },
@@ -279,6 +287,7 @@ export async function streamChat(
     body: JSON.stringify({
       text,
       ...(options?.mode ? { mode: options.mode } : {}),
+      ...(options?.model ? { model: options.model } : {}),
       ...(options?.history?.length ? { history: options.history } : {}),
     }),
     signal: options?.signal,

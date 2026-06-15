@@ -23,6 +23,7 @@ import { AnthropicClient } from './anthropic.js';
 import { GeminiClient } from './gemini.js';
 import { OpenAIResponsesClient } from './openai.js';
 import type { LlmRuntime } from './factory.js';
+import { providerDisplayName, type ModelOption } from './modelChoice.js';
 
 export type Provider = 'anthropic' | 'openai' | 'gemini';
 export type ModelTier = 'reasoning' | 'fast';
@@ -149,6 +150,29 @@ export class ModelRouter {
   /** Providers this router can actually use. */
   get providers(): Provider[] {
     return [...this.available];
+  }
+
+  /** The configured fast/reasoning model id for each available provider, in fallback order. */
+  catalog(): Array<{ provider: Provider; fastModel: string; reasoningModel: string }> {
+    return this.order.map((provider) => {
+      const rt = this.runtimes.get(provider)!;
+      return { provider, fastModel: rt.fastModel, reasoningModel: rt.reasoningModel };
+    });
+  }
+
+  /**
+   * The selectable model options for the UI: `Auto` first, then a fast and a
+   * reasoning entry per available provider (in fallback order, so the default
+   * provider leads). The wire `id`s round-trip through {@link parseModelChoice}.
+   */
+  modelOptions(): ModelOption[] {
+    const options: ModelOption[] = [{ id: 'auto', label: 'Auto', detail: 'picks speed by question' }];
+    for (const { provider, fastModel, reasoningModel } of this.catalog()) {
+      const name = providerDisplayName(provider);
+      options.push({ id: `${provider}:fast`, label: `${name} · Fast`, detail: fastModel });
+      options.push({ id: `${provider}:reasoning`, label: `${name} · Smart`, detail: reasoningModel });
+    }
+    return options;
   }
 
   /** Resolve a task to a concrete client + model. */

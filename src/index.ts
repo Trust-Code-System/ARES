@@ -15,6 +15,7 @@ import { stdin, stdout, argv } from 'node:process';
 import { loadConfig } from './config.js';
 import { ConsoleLogger } from './logging/logger.js';
 import { buildLlmClient } from './llm/factory.js';
+import { buildModelRouter } from './llm/router.js';
 import { buildVisionExtractor } from './llm/vision.js';
 import { createDefaultRegistry } from './tools/index.js';
 import { SKILLS_PROMPT_NOTE } from './skills/index.js';
@@ -62,6 +63,8 @@ async function main(): Promise<void> {
 
   const llm = buildLlmClient(config);
   const client = llm.client;
+  // Multi-provider router: powers `Auto` tier selection and explicit model switches.
+  const router = buildModelRouter(config, logger);
 
   // Phase 2: real memory (Postgres + pgvector) when configured, else in-memory.
   const memory = buildMemoryBackend(config, client, logger);
@@ -128,6 +131,7 @@ async function main(): Promise<void> {
 
   const agent = new Agent({
     client,
+    ...(router ? { router } : {}),
     registry,
     gate: safety.gate,
     memory: memory.retriever,

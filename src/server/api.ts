@@ -69,6 +69,8 @@ export interface ApiDeps {
     provider: 'anthropic' | 'openai' | 'gemini';
     model: string;
     fastModel: string;
+    /** Selectable model options for the UI switch (`auto` + per-provider tiers). */
+    modelOptions?: Array<{ id: string; label: string; detail: string }>;
     voiceEnabled: boolean;
     voiceInputProvider?: string;
     voiceOutputProvider?: string;
@@ -116,6 +118,7 @@ export class ApiHandler {
         provider: this.deps.runtime?.provider ?? 'anthropic',
         model: this.deps.runtime?.model ?? 'unknown',
         fastModel: this.deps.runtime?.fastModel ?? 'unknown',
+        modelOptions: this.deps.runtime?.modelOptions ?? [],
         voiceEnabled: this.deps.runtime?.voiceEnabled ?? Boolean(this.deps.voice),
         voiceInputProvider: this.deps.runtime?.voiceInputProvider ?? this.deps.voice?.sttProvider ?? null,
         voiceOutputProvider: this.deps.runtime?.voiceOutputProvider ?? this.deps.voice?.ttsProvider ?? null,
@@ -199,6 +202,7 @@ export class ApiHandler {
       text: parsed.data.text,
       source: 'user',
       ...(parsed.data.mode ? { mode: parsed.data.mode } : {}),
+      ...(parsed.data.model ? { model: parsed.data.model } : {}),
     });
     return ok({
       runId: result.runId,

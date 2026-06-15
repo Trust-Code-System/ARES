@@ -28,7 +28,9 @@ import type {
   Tool,
   ToolContext,
 } from '../types.js';
-import type { CreateMessageParams } from '../llm/anthropic.js';
+import type { CreateMessageParams, ModelTier } from '../llm/anthropic.js';
+import type { ModelRouter } from '../llm/router.js';
+import { parseModelChoice, type ParsedModelChoice } from '../llm/modelChoice.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { formatZodError } from '../tools/define.js';
 import { modeInstruction } from './modes.js';
@@ -37,17 +39,22 @@ export interface MessageClient {
   createMessage(params: CreateMessageParams): Promise<Anthropic.Message>;
 }
 
-/** Fast-tier router prompt: classify a user turn as casual chat vs. a real task. */
+/**
+ * Fast-tier router prompt: classify a user turn by how much model it needs, so
+ * `Auto` model selection can answer trivial chat instantly, run simple requests on
+ * the quick model, and reserve the slow reasoning model for genuinely hard work.
+ */
 const ROUTER_INSTRUCTION =
-  'You are a fast router for the assistant ARES. Decide whether the user\'s latest message '
-  + 'can be answered as casual conversation, or needs the full agent.\n\n'
-  + 'Answer with EXACTLY one word — CHAT or TASK:\n'
+  'You are a fast router for the assistant ARES. Classify the user\'s latest message '
+  + 'into EXACTLY one word — CHAT, SIMPLE, or COMPLEX:\n'
   + '- CHAT: greetings, small talk, pleasantries, thanks, feelings, opinions, or simple '
   + 'chit-chat that needs no tools, no stored personal facts, and no real-time data.\n'
-  + '- TASK: anything needing tools or actions (web search, email, calendar, files, shell, '
-  + 'code, trading, GitHub), recalling saved facts about the user, real-time or current '
-  + 'information (news, weather, prices, the date/time), or multi-step reasoning.\n'
-  + 'When in doubt, answer TASK.';
+  + '- SIMPLE: a real but straightforward request — one clear question, a quick lookup, '
+  + 'calculation, short factual or how-to answer, or light editing — answerable directly '
+  + 'or with at most one tool call.\n'
+  + '- COMPLEX: anything needing multi-step reasoning, several tools, coding or '
+  + 'architecture, deep analysis, or a long/careful answer.\n'
+  + 'When in doubt, answer COMPLEX.';
 
 /** System guidance for the lightweight conversational reply. */
 const CONVERSATIONAL_INSTRUCTION =
@@ -76,6 +83,13 @@ export interface AgentOptions {
    * entry points enable it; batch/event runners and tests leave it off.
    */
   enableFastChat?: boolean;
+  /**
+   * Optional multi-provider router. When present, an explicit `model` choice on the
+   * input (e.g. `openai:fast`) is resolved through it so a run can switch provider
+   * and tier. Absent → runs always use {@link AgentOptions.client}; an explicit
+   * tier still applies, but provider switching is a no-op.
+   */
+  router?: ModelRouter;
 }
 
 export class Agent {
@@ -146,10 +160,21 @@ export class Agent {
         return this.finish(runId, finalText, 'aborted', iterations, toolCalls, events);
       }
 
-      // 0. Fast path: answer casual small talk on the fast model, skipping memory
-      //    retrieval, tools, and the reasoning model. Returns null for real tasks.
-      const fast = await this.tryFastChat(input, runId, signal, events);
-      if (fast) return fast;
+      // 0. Decide which model handles this run. An explicit `model` choice forces a
+      //    provider/tier; `auto` classifies the turn — answering pure chat on the
+      //    fast path and picking the task tier (fast vs reasoning) by complexity.
+      const selection = parseModelChoice(input.model);
+      let loopClient: MessageClient = this.opts.client;
+      let loopTier: ModelTier = 'reasoning';
+      if (selection.mode === 'explicit') {
+        const resolved = this.resolveExplicit(selection);
+        loopClient = resolved.client;
+        loopTier = resolved.tier;
+      } else {
+        const verdict = await this.routeTurn(input, signal);
+        if (verdict === 'chat') return this.fastChatReply(input, runId, signal, events);
+        if (verdict === 'simple') loopTier = 'fast';
+      }
 
       // 1. Retrieve relevant memory and fold it into the system prompt.
       const memoryContext = await this.opts.memory.retrieve(input.text, runId);
@@ -167,11 +192,11 @@ export class Agent {
         }
         iterations++;
 
-        const response = await this.opts.client.createMessage({
+        const response = await loopClient.createMessage({
           system,
           messages,
           tools,
-          tier: 'reasoning',
+          tier: loopTier,
           ...(signal ? { signal } : {}),
           ...(events?.onText ? { onText: events.onText } : {}),
         });
@@ -374,38 +399,55 @@ export class Agent {
   }
 
   /**
-   * Lightweight conversational path. For casual user chat in general mode, a quick
-   * fast-tier classifier decides if the turn is small talk; if so we stream a brief
-   * reply on the fast model with no memory retrieval and no tools. Anything needing
-   * tools, memory, real-time data, or a specific mode returns null and falls through
-   * to the full agent. Fail-safe: source/mode guards and a TASK-biased classifier.
+   * Resolve an explicit `model` choice to a concrete client + tier. With a router
+   * configured, a named provider switches both; without one (or with no provider
+   * named) the default client is kept and only the tier applies.
    */
-  private async tryFastChat(
+  private resolveExplicit(sel: ParsedModelChoice): { client: MessageClient; tier: ModelTier } {
+    const tier: ModelTier = sel.tier ?? 'reasoning';
+    if (sel.provider && this.opts.router) {
+      const resolved = this.opts.router.resolve({ override: { provider: sel.provider, tier } });
+      return { client: resolved.client, tier: resolved.tier };
+    }
+    return { client: this.opts.client, tier };
+  }
+
+  /**
+   * Classify a turn for `Auto` model selection: 'chat' (answer on the fast path),
+   * 'simple' (full agent on the fast tier), or 'complex' (full agent on reasoning).
+   * Fail-safe: the same source/mode guards as the fast path gate it, and anything
+   * not eligible — or a classifier error — yields 'complex' (the prior behaviour).
+   */
+  private async routeTurn(
     input: AgentInput,
-    runId: string,
-    signal: AbortSignal | undefined,
-    events?: AgentEventHandlers,
-  ): Promise<AgentRunResult | null> {
-    if (!this.opts.enableFastChat) return null;
-    if (input.source !== 'user') return null;
-    if (input.mode && input.mode !== 'general') return null;
+    signal?: AbortSignal,
+  ): Promise<'chat' | 'simple' | 'complex'> {
+    if (!this.opts.enableFastChat) return 'complex';
+    if (input.source !== 'user') return 'complex';
+    if (input.mode && input.mode !== 'general') return 'complex';
 
     // Unambiguous small talk ("hi", "thanks", "good morning") skips the classifier
     // round-trip entirely and answers immediately — the single biggest latency cut
     // for trivial spoken turns. Whole-message match only, so it can never misroute a
-    // real request; anything else still pays for the TASK-biased classifier.
-    let kind: 'chat' | 'task';
-    if (isObviousSmallTalk(input.text)) {
-      kind = 'chat';
-    } else {
-      try {
-        kind = await this.classifyTurn(input, signal);
-      } catch {
-        return null; // classifier failed → use the full agent
-      }
+    // real request; anything else still pays for the COMPLEX-biased classifier.
+    if (isObviousSmallTalk(input.text)) return 'chat';
+    try {
+      return await this.classifyTurn(input, signal);
+    } catch {
+      return 'complex'; // classifier failed → use the full agent on reasoning
     }
-    if (kind !== 'chat') return null;
+  }
 
+  /**
+   * Lightweight conversational reply for a turn already classified as 'chat': a
+   * brief answer on the fast model with no memory retrieval and no tools.
+   */
+  private async fastChatReply(
+    input: AgentInput,
+    runId: string,
+    signal: AbortSignal | undefined,
+    events?: AgentEventHandlers,
+  ): Promise<AgentRunResult> {
     const system = `${this.opts.systemPrompt}\n\n## Conversational mode\n${CONVERSATIONAL_INSTRUCTION}`;
     const response = await this.opts.client.createMessage({
       system,
@@ -428,8 +470,11 @@ export class Agent {
     return { ...this.finish(runId, extractText(response.content), 'completed', 1, [], events), fastChat: true };
   }
 
-  /** One fast-tier call returning 'chat' or 'task'. Ambiguous/empty → 'task' (fail-safe). */
-  private async classifyTurn(input: AgentInput, signal?: AbortSignal): Promise<'chat' | 'task'> {
+  /** One fast-tier classification call. Ambiguous/empty/legacy → 'complex' (fail-safe). */
+  private async classifyTurn(
+    input: AgentInput,
+    signal?: AbortSignal,
+  ): Promise<'chat' | 'simple' | 'complex'> {
     const response = await this.opts.client.createMessage({
       system: ROUTER_INSTRUCTION,
       messages: [{ role: 'user', content: input.text }],
@@ -439,9 +484,9 @@ export class Agent {
       ...(signal ? { signal } : {}),
     });
     const verdict = extractText(response.content).toLowerCase();
-    if (verdict.includes('task')) return 'task';
     if (verdict.includes('chat')) return 'chat';
-    return 'task';
+    if (verdict.includes('simple')) return 'simple';
+    return 'complex';
   }
 
   private finish(

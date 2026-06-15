@@ -64,6 +64,7 @@ export default function ChatPage() {
   const [toolCount, setToolCount] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const [mode, setMode] = useState<AssistantMode>('general');
+  const [modelChoice, setModelChoice] = useState<string>('auto');
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [speaking, setSpeaking] = useState(false);
@@ -182,6 +183,8 @@ export default function ChatPage() {
     // Wake word defaults on; honour an explicit previous "off" choice.
     try {
       if (window.localStorage.getItem(WAKE_STORAGE_KEY) === 'off') setWakeEnabled(false);
+      const savedModel = window.localStorage.getItem(MODEL_STORAGE_KEY);
+      if (savedModel) setModelChoice(savedModel);
     } catch {
       // ignore
     }
@@ -197,6 +200,24 @@ export default function ChatPage() {
       // ignore
     }
   }, [wakeEnabled, hydrated]);
+
+  // Remember the model choice across reloads.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(MODEL_STORAGE_KEY, modelChoice);
+    } catch {
+      // ignore
+    }
+  }, [modelChoice, hydrated]);
+
+  // If the saved/selected model isn't among the server's offered options, fall back
+  // to Auto so a stale choice (e.g. a provider whose key was removed) can't get stuck.
+  useEffect(() => {
+    const options = runtime?.modelOptions;
+    if (!options || options.length === 0) return;
+    if (!options.some((opt) => opt.id === modelChoice)) setModelChoice('auto');
+  }, [runtime, modelChoice]);
 
   // Persist the active thread's transcript whenever it settles (skip mid-stream churn),
   // and keep that thread's title/timestamp in the index up to date.
@@ -498,7 +519,7 @@ export default function ChatPage() {
             setLastError(failure);
           }
         },
-      }, { mode, signal: controller.signal, history });
+      }, { mode, model: modelChoice, signal: controller.signal, history });
 
       if (turnGen !== turnGenRef.current) return;
       if (failure) {
@@ -925,6 +946,27 @@ export default function ChatPage() {
               >
                 {ASSISTANT_MODES.map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
+              {(runtime?.modelOptions?.length ?? 0) > 0 && (
+                <>
+                  <label htmlFor="model-choice" className="hud-label hidden shrink-0 sm:block">Model</label>
+                  <select
+                    id="model-choice"
+                    value={modelChoice}
+                    onChange={(event) => setModelChoice(event.target.value)}
+                    title={
+                      modelChoice === 'auto'
+                        ? 'Auto: ARES picks the fast or reasoning model per question'
+                        : runtime?.modelOptions?.find((opt) => opt.id === modelChoice)?.detail
+                    }
+                    className="h-9 shrink-0 border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ares-cyan outline-none"
+                    disabled={streaming}
+                  >
+                    {runtime!.modelOptions!.map((opt) => (
+                      <option key={opt.id} value={opt.id}>{opt.label}</option>
+                    ))}
+                  </select>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1114,6 +1156,7 @@ const SLASH_HELP = [
 ].join('\n');
 
 const WAKE_STORAGE_KEY = 'ares.wake.enabled';
+const MODEL_STORAGE_KEY = 'ares.model.choice';
 const MAX_SAVED_MESSAGES = 100;
 const BRIEFING_REQUEST =
   "Give me my briefing for today — today's weather, my calendar, and my open tasks. Keep it concise and natural to listen to.";

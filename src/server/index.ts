@@ -10,6 +10,7 @@ import process from 'node:process';
 import { loadConfig } from '../config.js';
 import { ConsoleLogger } from '../logging/logger.js';
 import { buildLlmClient } from '../llm/factory.js';
+import { buildModelRouter } from '../llm/router.js';
 import { buildVisionExtractor } from '../llm/vision.js';
 import { createDefaultRegistry } from '../tools/index.js';
 import { SKILLS_PROMPT_NOTE } from '../skills/index.js';
@@ -64,6 +65,10 @@ async function main(): Promise<void> {
 
   const llm = buildLlmClient(config);
   const client = llm.client;
+  // Multi-provider router: lets a chat turn switch provider/tier (the HUD model
+  // switch) and powers `Auto`'s per-question tier selection. Built from whichever
+  // providers have keys; the configured provider leads its fallback order.
+  const router = buildModelRouter(config, logger);
 
   const memory = buildMemoryBackend(config, client, logger);
   const safety = buildSafetyBackend(config, memory.db, logger); // no prompter: UI resolves via the queue
@@ -106,6 +111,7 @@ async function main(): Promise<void> {
 
   const agent = new Agent({
     client,
+    ...(router ? { router } : {}),
     registry,
     gate: safety.gate,
     memory: memory.retriever,
@@ -140,6 +146,7 @@ async function main(): Promise<void> {
         provider: llm.provider,
         model: llm.reasoningModel,
         fastModel: llm.fastModel,
+        ...(router ? { modelOptions: router.modelOptions() } : {}),
         voiceEnabled: Boolean(voice),
         voiceInputProvider: voice?.sttProvider,
         voiceOutputProvider: voice?.ttsProvider,
