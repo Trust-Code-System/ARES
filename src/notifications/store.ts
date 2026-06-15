@@ -47,7 +47,8 @@ export interface NotificationStore {
 // ---------------------------------------------------------------------------
 
 export class InMemoryNotificationStore implements NotificationStore {
-  private readonly items: Notification[] = [];
+  private readonly items: Array<{ row: Notification; seq: number }> = [];
+  private seq = 0;
 
   async add(n: NewNotification): Promise<Notification> {
     const row: Notification = {
@@ -59,27 +60,30 @@ export class InMemoryNotificationStore implements NotificationStore {
       createdAt: new Date().toISOString(),
       readAt: null,
     };
-    this.items.push(row);
+    this.items.push({ row, seq: this.seq++ });
     return { ...row };
   }
 
   async recent(limit = 50): Promise<Notification[]> {
+    // Sort newest-first by timestamp, with the insertion sequence as a stable
+    // tiebreaker so entries created within the same millisecond still order
+    // newest-first (a plain timestamp sort would keep them oldest-first).
     return this.items
       .slice()
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort((a, b) => b.row.createdAt.localeCompare(a.row.createdAt) || b.seq - a.seq)
       .slice(0, limit)
-      .map((r) => ({ ...r }));
+      .map((r) => ({ ...r.row }));
   }
 
   async markRead(id: string): Promise<Notification | null> {
-    const row = this.items.find((r) => r.id === id);
-    if (!row) return null;
-    if (!row.readAt) row.readAt = new Date().toISOString();
-    return { ...row };
+    const entry = this.items.find((r) => r.row.id === id);
+    if (!entry) return null;
+    if (!entry.row.readAt) entry.row.readAt = new Date().toISOString();
+    return { ...entry.row };
   }
 
   async unreadCount(): Promise<number> {
-    return this.items.filter((r) => !r.readAt).length;
+    return this.items.filter((r) => !r.row.readAt).length;
   }
 }
 

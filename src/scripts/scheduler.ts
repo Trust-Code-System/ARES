@@ -34,7 +34,7 @@ import { buildMcpTools } from '../mcp/factory.js';
 import { Agent } from '../agent/orchestrator.js';
 import { AutonomousRunner } from '../autonomy/runner.js';
 import { maintenanceJob } from '../autonomy/jobs.js';
-import { morningBriefingJob, inboxScanJob } from '../autonomy/briefingJobs.js';
+import { morningBriefingJob, inboxScanJob, weeklyProjectReportJob } from '../autonomy/briefingJobs.js';
 import { WebhookServer } from '../autonomy/webhooks.js';
 import { consolidateMemory } from '../memory/consolidation.js';
 import type { StandingRulesStore } from '../safety/store.js';
@@ -107,6 +107,7 @@ async function main(): Promise<void> {
 
   scheduler.register(morningBriefingJob(runner));
   scheduler.register(inboxScanJob(runner));
+  scheduler.register(weeklyProjectReportJob(runner));
 
   // Memory consolidation only makes sense against a real database.
   if (memory.db) {

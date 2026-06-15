@@ -64,7 +64,7 @@ src/
     scheduler.ts        Scheduler contract + nextRun(cron) + InMemoryScheduler
     bullmqScheduler.ts  BullMQ/Redis scheduler (durable, the production path)
     jobs.ts             agentJob/maintenanceJob builders (schedule → runner)
-    briefingJobs.ts     morning-briefing + inbox-scan job definitions
+    briefingJobs.ts     morning-briefing + inbox-scan + weekly-project-report jobs
     webhooks.ts         WebhookHandler + WebhookServer (external events → runner)
     factory.ts          buildAutonomyBackend() + buildScheduler() — DB/Redis vs in-memory
   db/
@@ -288,15 +288,19 @@ process lives) otherwise. Cron strings are parsed in **local time**, so
 ([scripts/scheduler.ts](src/scripts/scheduler.ts)) wires the agent + runner +
 scheduler and registers the **morning briefing** (06:00 daily — calendar + mail
 summary + overnight news, delivered via `notify`), the **inbox scan** (hourly —
-surface anything urgent), and, with a database, a nightly `consolidate`
-maintenance job ([autonomy/briefingJobs.ts](src/autonomy/briefingJobs.ts)). Since
-`notify` is gated and the daemon has no human, it seeds a standing allow-rule for
-`notify` at startup so the briefing can actually reach you.
+surface anything urgent), the **weekly project report** (Mondays 08:00 — per
+project: progress, open tasks, risks, blockers, and suggested next actions, drawn
+from structured memory + the task list), and, with a database, a nightly
+`consolidate` maintenance job
+([autonomy/briefingJobs.ts](src/autonomy/briefingJobs.ts)). Since `notify` is
+gated and the daemon has no human, it seeds a standing allow-rule for `notify` at
+startup so these reports can actually reach you.
 
 ```bash
 # run the autonomy daemon (fires scheduled jobs until Ctrl-C)
 npm run scheduler
-npm run scheduler -- --once morning-briefing   # fire one job immediately and exit
+npm run scheduler -- --once morning-briefing        # fire one job immediately and exit
+npm run scheduler -- --once weekly-project-report   # the weekly per-project report
 
 # run a one-off task on the autonomous path (no human; mutations queue)
 npm run autonomous -- "summarize my day and flag anything urgent"
@@ -551,9 +555,9 @@ HTTP request bodies are validated the same way via Zod schemas in
   gated trading tools (with the trade notional cap) — on top of the gate, standing
   rules, confirmation queue, files, `web_fetch`, and `web_search`.
 - **Phase 4 — Autonomy: done.** Kill switch, activity feed, autonomous runner, the
-  BullMQ/Redis scheduler (with in-memory fallback), the morning-briefing +
-  hourly-inbox-scan jobs, the webhook trigger layer, off-hot-path memory ingestion,
-  and hard spend/trade caps enforced in the gate.
+  BullMQ/Redis scheduler (with in-memory fallback), the morning-briefing,
+  hourly-inbox-scan, and weekly-project-report jobs, the webhook trigger layer,
+  off-hot-path memory ingestion, and hard spend/trade caps enforced in the gate.
 - **Phase 5 — Interface (in progress):** the **API server** (`npm run serve`,
   [src/server](src/server)) exposing chat (SSE) + all dashboard data is **done and
   tested**; the **Next.js UI** ([web/](web)) — chat with a live tool-activity

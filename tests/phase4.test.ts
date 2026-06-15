@@ -20,8 +20,10 @@ import { agentJob } from '../src/autonomy/jobs.js';
 import {
   morningBriefingJob,
   inboxScanJob,
+  weeklyProjectReportJob,
   MORNING_BRIEFING_CRON,
   INBOX_SCAN_CRON,
+  WEEKLY_PROJECT_REPORT_CRON,
 } from '../src/autonomy/briefingJobs.js';
 import { WebhookHandler } from '../src/autonomy/webhooks.js';
 import type { AgentInput, AgentRunResult, Logger } from '../src/types.js';
@@ -324,13 +326,18 @@ describe('InMemoryScheduler', () => {
 });
 
 describe('briefing jobs', () => {
-  it('define valid crons (06:00 daily briefing, hourly inbox scan)', () => {
+  it('define valid crons (06:00 daily briefing, hourly inbox scan, Monday 08:00 weekly report)', () => {
     assert.equal(MORNING_BRIEFING_CRON, '0 6 * * *');
     assert.equal(INBOX_SCAN_CRON, '0 * * * *');
-    // Both must parse; nextRun throws otherwise.
+    assert.equal(WEEKLY_PROJECT_REPORT_CRON, '0 8 * * 1');
+    // All must parse; nextRun throws otherwise.
     const six = nextRun(MORNING_BRIEFING_CRON, new Date('2026-06-14T12:00:00'));
     assert.equal(six.getHours(), 6);
     assert.equal(nextRun(INBOX_SCAN_CRON, new Date('2026-06-14T12:30:00')).getMinutes(), 0);
+    // 2026-06-14 is a Sunday; the next weekly report fires Monday the 15th at 08:00.
+    const weekly = nextRun(WEEKLY_PROJECT_REPORT_CRON, new Date('2026-06-14T12:00:00'));
+    assert.equal(weekly.getDay(), 1);
+    assert.equal(weekly.getHours(), 8);
   });
 
   it('run through the autonomous runner with the right trigger names', async () => {
@@ -340,14 +347,21 @@ describe('briefing jobs', () => {
 
     const briefing = morningBriefingJob(runner);
     const inbox = inboxScanJob(runner);
+    const weekly = weeklyProjectReportJob(runner);
     assert.equal(briefing.name, 'morning-briefing');
     assert.equal(inbox.name, 'inbox-scan');
+    assert.equal(weekly.name, 'weekly-project-report');
 
     await briefing.handler();
     await inbox.handler();
+    await weekly.handler();
     const recent = await activityFeed.recent();
     const triggers = recent.map((r) => r.trigger).sort();
-    assert.deepEqual(triggers, ['schedule:inbox-scan', 'schedule:morning-briefing']);
+    assert.deepEqual(triggers, [
+      'schedule:inbox-scan',
+      'schedule:morning-briefing',
+      'schedule:weekly-project-report',
+    ]);
     assert.ok(recent.every((r) => r.status === 'completed'));
   });
 });
