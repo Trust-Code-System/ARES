@@ -1,0 +1,14 @@
+{
+  "id": "ui-ux/ui-ux-pro-max",
+  "name": "ui-ux-pro-max",
+  "category": "ui-ux",
+  "source_repo": "nextlevelbuilder/ui-ux-pro-max-skill (MIT)",
+  "trigger_keywords": [
+    "ui", "ux", "design", "landing page", "dashboard", "saas", "mobile app",
+    "premium", "modern", "redesign", "design system", "interface", "make it look good"
+  ],
+  "required_tools": ["write_file", "read_file"],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

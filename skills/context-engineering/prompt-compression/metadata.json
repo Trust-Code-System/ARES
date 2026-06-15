@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/prompt-compression",
+  "name": "prompt-compression",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["compress", "shorten prompt", "token cost", "summarize history", "briefing", "trim context", "bloated prompt"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

@@ -19,6 +19,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
 COPY migrations ./migrations
+# The vendored expert skill library backing find_skill/use_skill.
+COPY skills ./skills
 COPY deploy/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
 RUN chmod +x /usr/local/bin/api-entrypoint.sh && mkdir -p /data/workspace
 EXPOSE 3001

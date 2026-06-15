@@ -1,0 +1,12 @@
+{
+  "id": "design/ui-designer",
+  "name": "ui-designer",
+  "category": "design",
+  "description": "Designs the visual and interaction layer — layout, hierarchy, spacing, color, and components. Use to make an interface look premium, define a design direction, or critique UI before it's built in code.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["design", "ui", "ux", "premium", "dashboard", "layout", "visual", "look", "polish", "interface", "design system", "spacing", "typography"],
+  "skills": ["ui-ux/premium-product-design", "ui-ux/ui-ux-pro-max", "ui-ux/accessibility-responsive"],
+  "tools": [],
+  "risk_level": "low",
+  "enabled": true
+}

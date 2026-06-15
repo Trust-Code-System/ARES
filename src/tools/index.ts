@@ -17,6 +17,11 @@ import type { StructuredStore } from '../memory/stores.js';
 import { createPythonTool, type PythonToolOptions } from './builtin/python.js';
 import { createSystemActionTools } from './builtin/systemActions.js';
 import { createDocumentTools } from './builtin/documents.js';
+import { createRemotionTool } from './builtin/remotion.js';
+import { createSkillTools } from '../skills/index.js';
+import { createAgentTools } from '../agents/index.js';
+import type { Provider } from '../llm/router.js';
+import type { SkillUsageStore } from '../skills/usage.js';
 import type { VisionExtractor } from '../llm/vision.js';
 import type { NotificationStore } from '../notifications/store.js';
 import type { TaskStore } from '../tasks/store.js';
@@ -32,6 +37,8 @@ export interface RegistryOptions {
   python?: { enabled: boolean } & Omit<PythonToolOptions, 'workspaceDir'>;
   /** Cross-platform approved application and URL launch tools. */
   systemActionsEnabled?: boolean;
+  /** Remotion video scaffolder. Registered only when enabled (default off). */
+  remotionEnabled?: boolean;
   /** Optional broker backend. Trading tools are registered only when present. */
   tradingProvider?: BrokerProvider;
   /** Optional GitHub client. The github_* dev tools are registered only when present. */
@@ -47,6 +54,18 @@ export interface RegistryOptions {
   notificationStore?: NotificationStore;
   /** Task store. When present, the create_task/list_tasks/update_task tools are registered. */
   taskStore?: TaskStore;
+  /**
+   * Expert skill library. When present, the read-only find_skill/use_skill tools
+   * are registered over the vendored skills directory. An optional usageStore
+   * records each successful use_skill load (skill-usage memory).
+   */
+  skills?: { dir: string; usageStore?: SkillUsageStore };
+  /**
+   * Specialist-agent (persona) library. When present, the read-only
+   * find_agent/use_agent/agent_route tools are registered over the personas
+   * directory. `availableProviders` keeps agent_route's model choice honest.
+   */
+  agents?: { dir: string; usageStore?: SkillUsageStore; availableProviders?: ReadonlySet<Provider> };
   /** Additional tools to register (e.g. tools imported from MCP servers). */
   extraTools?: Tool[];
 }
@@ -93,6 +112,10 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
     for (const tool of createSystemActionTools()) registry.register(tool);
   }
 
+  if (opts.remotionEnabled) {
+    registry.register(createRemotionTool(opts.workspaceDir));
+  }
+
   if (opts.tradingProvider) {
     for (const tool of createTradingTools(opts.tradingProvider)) registry.register(tool);
   }
@@ -107,6 +130,25 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
 
   if (opts.taskStore) {
     for (const tool of createTaskTools(opts.taskStore)) registry.register(tool);
+  }
+
+  if (opts.skills) {
+    for (const tool of createSkillTools({
+      skillsDir: opts.skills.dir,
+      ...(opts.skills.usageStore ? { usageStore: opts.skills.usageStore } : {}),
+    })) {
+      registry.register(tool);
+    }
+  }
+
+  if (opts.agents) {
+    for (const tool of createAgentTools({
+      agentsDir: opts.agents.dir,
+      ...(opts.agents.usageStore ? { usageStore: opts.agents.usageStore } : {}),
+      ...(opts.agents.availableProviders ? { availableProviders: opts.agents.availableProviders } : {}),
+    })) {
+      registry.register(tool);
+    }
   }
 
   for (const tool of opts.extraTools ?? []) registry.register(tool);

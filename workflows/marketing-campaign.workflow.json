@@ -1,0 +1,14 @@
+{
+  "id": "marketing-campaign",
+  "name": "Marketing Campaign Workflow",
+  "description": "Plan and produce a focused, measurable marketing campaign.",
+  "trigger_keywords": ["marketing campaign", "launch campaign", "get users", "growth campaign", "promote"],
+  "required_inputs": ["product + audience", "goal metric", "any budget/channel constraints"],
+  "stages": [
+    { "agent": "marketing/growth-strategist", "task": "Diagnose the funnel; pick the lever; design experiments", "outputs": "experiment plan", "skills": ["marketing-haines/marketing-plan"] },
+    { "agent": "marketing/copywriter", "task": "Write the campaign copy and CTA variants", "outputs": "copy + variants", "skills": ["writing/stop-slop"] },
+    { "agent": "ai/evaluation-engineer", "task": "Define how success is measured", "outputs": "metric + threshold" }
+  ],
+  "quality_checks": ["one clear metric and threshold", "no dark patterns or false claims", "channel-market fit considered"],
+  "final_deliverable": "A measurable campaign: experiment plan, copy, and success metric."
+}

@@ -1,0 +1,16 @@
+{
+  "id": "fine-tuning",
+  "name": "Fine-Tuning Workflow",
+  "description": "Decide whether to fine-tune, then prepare/validate/evaluate a dataset safely.",
+  "trigger_keywords": ["fine-tune", "fine tune", "train a model", "tune jarvis", "prepare training data", "dataset for tuning"],
+  "required_inputs": ["the behavior to improve", "example inputs/outputs (no private user data without consent)"],
+  "requires_sensitive_data_scan": true,
+  "stages": [
+    { "agent": "ai/agent-architect", "task": "Decide fine-tune vs prompt/skill/RAG/memory/tool", "outputs": "decision + rationale", "skills": ["context-engineering/rag-strategy"] },
+    { "agent": "ai/prompt-engineer", "task": "If not tuning, fix via prompt/examples instead", "outputs": "improved prompt (or 'tuning justified')" },
+    { "agent": "ai/evaluation-engineer", "task": "Build dataset (sanitized, split) + baseline eval; run tuning; measure delta", "outputs": "dataset + before/after eval", "tools": ["write_file", "run_shell"], "skills": ["context-engineering/evaluation-loops"] },
+    { "agent": "strategy/reality-checker", "task": "Confirm the delta justifies the cost and there is a rollback", "outputs": "ship/no-ship verdict" }
+  ],
+  "quality_checks": ["sensitive-data scan passed (npm run train:validate)", "eval set held out (no leakage)", "tuned model beats baseline on the metric", "rollback id recorded in ai-training/adapters"],
+  "final_deliverable": "A justified tuning decision with a sanitized dataset, before/after eval, and rollback record."
+}

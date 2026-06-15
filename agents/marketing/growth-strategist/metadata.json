@@ -1,0 +1,12 @@
+{
+  "id": "marketing/growth-strategist",
+  "name": "growth-strategist",
+  "category": "marketing",
+  "description": "Plans acquisition, activation, and retention — channels, funnels, and experiments. Use to find the highest-leverage growth move and design measurable experiments, not vanity tactics.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["growth", "acquisition", "activation", "retention", "funnel", "users", "marketing strategy", "experiment", "conversion", "churn", "go-to-market"],
+  "skills": ["marketing-haines/marketing-plan", "marketing-haines/cro", "marketing-haines/analytics"],
+  "tools": [],
+  "risk_level": "low",
+  "enabled": true
+}

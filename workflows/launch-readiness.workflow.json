@@ -1,0 +1,15 @@
+{
+  "id": "launch-readiness",
+  "name": "Launch Readiness Workflow",
+  "description": "Confirm a feature or product is ready to launch.",
+  "trigger_keywords": ["ready to launch", "production ready", "launch readiness", "go live", "ship it"],
+  "required_inputs": ["the thing being launched", "the success criteria"],
+  "stages": [
+    { "agent": "testing/qa-test-engineer", "task": "Confirm test coverage of critical paths", "outputs": "coverage summary" },
+    { "agent": "security/security-engineer", "task": "Final security pass", "outputs": "findings" },
+    { "agent": "engineering/devops-engineer", "task": "Verify deploy, health checks, rollback, and monitoring", "outputs": "ops checklist" },
+    { "agent": "strategy/reality-checker", "task": "Final go/no-go with blockers and mitigations", "outputs": "verdict" }
+  ],
+  "quality_checks": ["critical paths tested", "rollback verified", "monitoring in place", "no Critical security findings"],
+  "final_deliverable": "A launch go/no-go with a blocker list and mitigations."
+}

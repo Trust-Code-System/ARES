@@ -1,0 +1,14 @@
+{
+  "id": "ui-review",
+  "name": "UI Review Workflow",
+  "description": "Critique and improve an interface's look, usability, and implementation.",
+  "trigger_keywords": ["review ui", "make it look premium", "improve dashboard", "design critique", "polish the ui"],
+  "required_inputs": ["the screen/component (code, screenshot, or description)"],
+  "stages": [
+    { "agent": "design/ui-designer", "task": "Critique hierarchy, spacing, type, color, and states; specify tokens", "outputs": "design spec + critique", "skills": ["ui-ux/premium-product-design"] },
+    { "agent": "design/ux-researcher", "task": "Flag usability friction in the flow", "outputs": "friction list" },
+    { "agent": "engineering/frontend-developer", "task": "Apply the spec in code, keeping accessibility", "outputs": "UI diff", "tools": ["edit_file"] }
+  ],
+  "quality_checks": ["clear primary action", "contrast/accessibility acceptable", "responsive at breakpoints"],
+  "final_deliverable": "An improved UI with a design spec and an implemented diff."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "ai/prompt-engineer",
+  "name": "prompt-engineer",
+  "category": "ai",
+  "description": "Designs, debugs, and optimizes prompts and system instructions. Use to improve an LLM prompt's reliability, fix bad outputs, or decide between prompting, examples, and structure.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["prompt", "system prompt", "instruction", "llm", "few-shot", "output format", "classifier prompt", "prompt engineering"],
+  "skills": ["context-engineering/prompt-compression", "writing/stop-slop"],
+  "tools": [],
+  "risk_level": "low",
+  "enabled": true
+}

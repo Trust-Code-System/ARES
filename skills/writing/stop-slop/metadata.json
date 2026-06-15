@@ -1,0 +1,14 @@
+{
+  "id": "writing/stop-slop",
+  "name": "stop-slop",
+  "category": "writing",
+  "source_repo": "hardikpandya/stop-slop (see upstream LICENSE)",
+  "trigger_keywords": [
+    "ai-generated", "sounds like ai", "rewrite", "edit", "humanize", "de-slop",
+    "remove ai tone", "filler", "make it sound human", "proofread", "tighten prose"
+  ],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

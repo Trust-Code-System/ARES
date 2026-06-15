@@ -1,0 +1,12 @@
+{
+  "id": "testing/qa-test-engineer",
+  "name": "qa-test-engineer",
+  "category": "testing",
+  "description": "Designs and writes tests, defines acceptance criteria, and finds gaps in coverage. Use to create unit/integration tests, plan QA for a feature, or decide what to verify before shipping.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["test", "tests", "testing", "qa", "coverage", "acceptance criteria", "unit test", "integration test", "verify", "regression"],
+  "skills": ["engineering-team/playwright-pro"],
+  "tools": ["read_file", "write_file", "run_shell"],
+  "risk_level": "low",
+  "enabled": true
+}

@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/rag-strategy",
+  "name": "rag-strategy",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["rag", "retrieval", "chunking", "embeddings", "vector search", "knowledge base", "grounding", "re-rank"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

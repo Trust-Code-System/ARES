@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/multi-agent-workflows",
+  "name": "multi-agent-workflows",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["multi-agent", "sub-agent", "orchestrator", "agent coordination", "parallel agents", "delegate", "worker agent", "handoff"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

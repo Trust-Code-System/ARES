@@ -1,0 +1,12 @@
+{
+  "id": "engineering/frontend-developer",
+  "name": "frontend-developer",
+  "category": "engineering",
+  "description": "Implements and improves UI in code — components, state, accessibility, and performance. Use to build or refine dashboards, forms, and interactive views, and to turn designs into working front-end code.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["frontend", "front-end", "ui", "component", "dashboard", "react", "css", "responsive", "form", "page", "premium", "interface"],
+  "skills": ["ui-ux/premium-product-design", "ui-ux/accessibility-responsive", "ui-ux/ui-ux-pro-max"],
+  "tools": ["read_file", "write_file", "edit_file"],
+  "risk_level": "low",
+  "enabled": true
+}

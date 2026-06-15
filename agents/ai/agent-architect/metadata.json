@@ -1,0 +1,12 @@
+{
+  "id": "ai/agent-architect",
+  "name": "agent-architect",
+  "category": "ai",
+  "description": "Designs agent systems — tools, memory, routing, and multi-agent topology. Use to decide between prompting/skills/RAG/memory/tools/fine-tuning and to structure single- or multi-agent workflows.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["agent", "agents", "multi-agent", "rag", "memory", "fine-tuning", "fine tune", "routing", "orchestrator", "tool use", "agent design", "context engineering"],
+  "skills": ["context-engineering/multi-agent-workflows", "context-engineering/rag-strategy", "context-engineering/memory-design", "context-engineering/tool-orchestration"],
+  "tools": ["find_skill", "agent_route"],
+  "risk_level": "low",
+  "enabled": true
+}

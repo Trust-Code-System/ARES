@@ -186,10 +186,12 @@ not the prompt. Current suite:
 | `run_command` | state-mutating | **Off by default.** Allowlisted programs only, no shell, jailed cwd, hard timeout, output cap. |
 | `run_python` | state-mutating | Isolated Python process, jailed cwd, hard timeout/output cap, and always gated. |
 | `open_application` · `open_url` | state-mutating | Approved app aliases and HTTP(S) URLs only; always gated. |
+| `remotion_video_generator` | state-mutating | **Off by default** (`ARES_REMOTION_ENABLED`). Scaffolds a render-ready Remotion (React) video project into the workspace from title/scenes/colors/audio; returns install + render commands to run via `run_command` (it does not render directly). Surfaces the Remotion commercial-license warning. |
 | `get_positions` · `get_balance` | read-only | **Off by default.** Brokerage reads via a pluggable provider — paper broker, or **Alpaca** (`ARES_BROKER=alpaca`). |
 | `place_trade` | state-mutating | **Off by default.** Gated + subject to the hard trade notional cap. Executes via the paper or Alpaca broker. |
 | `github_search` · `github_read_file` | read-only | **Off by default.** Search repos/code/issues and read a file from a repo via the GitHub REST API. Registered when `GITHUB_TOKEN` is set. |
 | `github_create_issue` | state-mutating | **Off by default.** Open an issue in a repo; gated like every write. |
+| `find_skill` · `use_skill` | read-only | Search and load expert playbooks from the vendored skill library (see **Skills** below). Bundled scripts run only via gated `run_python`. |
 | `calculate` · `get_current_time` | read-only | Deterministic built-ins. |
 | *MCP-imported* (Gmail, Calendar, …) | classified per tool | Imported from MCP servers; read verbs → read-only, everything else → gated. |
 
@@ -217,6 +219,61 @@ state-mutating call in this order:
 
 Rules and the queue persist to Postgres (migration `0002`) when `DATABASE_URL` is
 set, in-memory otherwise.
+
+### Expert skills
+
+ARES ships a large library of domain **playbooks** (engineering, product,
+marketing, finance, research, compliance, leadership, operations, …), vendored
+under [skills/](skills) from the MIT-licensed
+[claude-skills](https://github.com/alirezarezvani/claude-skills) project. Each
+skill is a `SKILL.md` (frontmatter `name` + `description`, plus a markdown
+playbook), some with bundled Python scripts.
+
+Rather than dump the whole catalog into the system prompt, ARES uses **progressive
+disclosure** through two read-only tools ([src/skills/](src/skills)):
+
+- **`find_skill(query)`** — ranked keyword search over every skill's name and
+  description; returns matches as `<category>/<name>` ids.
+- **`use_skill(id)`** — loads one skill's full playbook on demand. Skills are
+  keyed by `id = <category>/<name>` since some names recur across categories; a
+  bare name is accepted when unambiguous, otherwise the colliding ids are listed.
+
+The index is built lazily on first use and cached. Any Python scripts a skill
+bundles are surfaced as paths only — they execute **solely through the gated,
+audited `run_python` tool**, never automatically. Configure with `ARES_SKILLS_DIR`
+(default `./skills`) and `ARES_SKILLS_ENABLED` (default `true`).
+
+**Skill metadata.** A skill may carry an optional `metadata.json` next to its
+`SKILL.md` ([loader.ts](src/skills/loader.ts), `readMetadata`): `id`, `category`,
+`source_repo`, `trigger_keywords` (folded into `find_skill` ranking),
+`required_tools`, `risk_level` (surfaced in `find_skill` output), `version`, and
+`enabled` (`false` excludes the skill from the index entirely). It's fully
+backward-compatible — skills without the file behave exactly as before, defaulting
+to `risk_level: low` and no triggers.
+
+**Supply-chain vetting.** Because `use_skill` loads third-party playbooks verbatim
+into context, the static scanner ([scanner.ts](src/skills/scanner.ts), `npm run
+scan:skills`) grades every skill for prompt-injection / role-hijack / safety-bypass
+/ exfil language in prose and network/exec/secret access in bundled scripts. A
+`<!-- noqa: SEC-AUDITOR -->` marker on a line exempts reviewed examples (the
+security-education skills depend on it). It's advisory — reads files, never executes
+— and exits non-zero at/above a threshold (default `critical`) so it can gate CI.
+
+**Skill packs.** Beyond the vendored MIT
+[claude-skills](https://github.com/alirezarezvani/claude-skills) and
+[marketing skills](https://github.com/coreyhaines31/marketingskills), ARES adds
+`writing/stop-slop` (de-AI editing), `ui-ux/*` (design system, premium polish,
+accessibility — distilled from the MIT
+[ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)),
+`context-engineering/*` (memory design, context-window management, prompt
+compression, tool orchestration, multi-agent, RAG, evaluation — distilled from the
+MIT [Agent-Skills-for-Context-Engineering](https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering)),
+and `video/remotion` (drives the Remotion tool below).
+
+**Skill-usage memory.** An optional in-memory `SkillUsageStore`
+([usage.ts](src/skills/usage.ts)) records each successful `use_skill` load (which
+skill, which run, when) for "what expertise have I used" and future routing bias.
+In-memory only today (resets per process); Postgres persistence is a follow-up.
 
 ### External tools via MCP (Gmail, Calendar, …)
 
@@ -374,6 +431,20 @@ allowed only on loopback; the server **refuses to bind a non-loopback
 `ARES_API_HOST` without a key**. It also rejects browser origins outside
 `ARES_API_ORIGINS`.
 
+### Per-task model routing
+
+`ARES_LLM_PROVIDER` selects one provider for the process. On top of that,
+[llm/router.ts](src/llm/router.ts) adds a **per-task `ModelRouter`**: given a
+task's shape (`kind`, `needsLongContext`, `needsStructuredOutput`,
+`latencySensitive`, or a manual `override`) it picks the best provider **and**
+tier (`reasoning`/`fast`) among the providers that actually have keys, with a pure,
+unit-tested policy — Claude for deep coding / architecture / long-context, OpenAI
+for structured-output and latency-sensitive work, Gemini as generalist — and
+**automatic fallback**: `withFallback()` retries the next available provider when
+one errors. Build it with `buildModelRouter(config)`. It *wraps* the existing
+`buildLlmClient` factory rather than replacing it, so the current single-provider
+agent loop is untouched; adopting it inside the loop is a follow-up.
+
 ## Gemini, ElevenLabs, and desktop mode
 
 Gemini is a first-class provider across the whole system: **reasoning**
@@ -478,6 +549,9 @@ npm run typecheck         # tsc --noEmit
 | `ARES_GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Gemini embedding model (when the Gemini embedder is selected). Output truncated to `ARES_EMBEDDING_DIM`. |
 | `ARES_EMBEDDING_DIM`      | `1024`              | Embedding dimension. **Must match the `vector(N)` column in the migration.** |
 | `ARES_WORKSPACE_DIR`      | `./workspace`       | Sandbox the file tools are jailed to.                       |
+| `ARES_SKILLS_DIR`         | `./skills`          | Vendored expert skill library backing `find_skill`/`use_skill`. |
+| `ARES_SKILLS_ENABLED`     | `true`              | Set `false` to disable the skill library (the skill tools aren't registered). |
+| `ARES_REMOTION_ENABLED`   | `false`             | Set `true` to register the gated `remotion_video_generator` tool. Mind Remotion's commercial license (free for individuals/non-profits/≤3-employee orgs; paid otherwise). |
 | `TAVILY_API_KEY`          | — (optional)        | Enables `web_search`. Unset → the tool isn't registered.    |
 | `GITHUB_TOKEN`            | — (optional)        | Enables the `github_*` dev tools (search/read read-only, issue creation gated). Unset → not registered. |
 | `GITHUB_API_URL`          | `https://api.github.com` | GitHub REST base URL; override for GitHub Enterprise Server. |

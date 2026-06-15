@@ -1,0 +1,14 @@
+{
+  "id": "video/remotion",
+  "name": "remotion",
+  "category": "video",
+  "source_repo": "remotion-dev/remotion (Remotion License — see SKILL.md)",
+  "trigger_keywords": [
+    "video", "promo video", "explainer", "animation", "animated text", "render video",
+    "social clip", "reels", "mp4", "motion graphics", "30-second video"
+  ],
+  "required_tools": ["remotion_video_generator", "run_command", "write_file"],
+  "risk_level": "medium",
+  "enabled": true,
+  "version": "1.0.0"
+}

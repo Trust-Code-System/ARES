@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/context-window-management",
+  "name": "context-window-management",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["context window", "token limit", "lost in the middle", "degradation", "compaction", "prompt caching", "drift", "long session"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "refactor",
+  "name": "Refactor Workflow",
+  "description": "Improve code structure without changing behavior.",
+  "trigger_keywords": ["refactor", "clean up code", "simplify", "restructure", "reduce complexity"],
+  "required_inputs": ["the code to refactor", "the goal (readability, perf, reuse)"],
+  "stages": [
+    { "agent": "engineering/code-reviewer", "task": "Identify the highest-value simplifications and risks", "outputs": "refactor plan", "tools": ["read_file"] },
+    { "agent": "engineering/backend-architect", "task": "Confirm boundaries/contracts stay intact", "outputs": "contract check" },
+    { "agent": "testing/qa-test-engineer", "task": "Ensure tests pin behavior before and after", "outputs": "behavior tests", "tools": ["run_shell"] }
+  ],
+  "quality_checks": ["behavior unchanged (tests green before+after)", "no contract breakage", "net complexity reduced"],
+  "final_deliverable": "A behavior-preserving refactor with tests proving it."
+}

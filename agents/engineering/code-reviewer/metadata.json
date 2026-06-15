@@ -1,0 +1,12 @@
+{
+  "id": "engineering/code-reviewer",
+  "name": "code-reviewer",
+  "category": "engineering",
+  "description": "Reviews code changes for correctness, clarity, and maintainability. Use to review a diff or PR for bugs, edge cases, and simplifications before merging.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["review", "code review", "pr", "pull request", "diff", "merge", "bug", "edge case", "regression", "refactor"],
+  "skills": [],
+  "tools": ["read_file", "github_get_pull_request"],
+  "risk_level": "low",
+  "enabled": true
+}

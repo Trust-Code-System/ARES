@@ -1,0 +1,12 @@
+{
+  "id": "design/ux-researcher",
+  "name": "ux-researcher",
+  "category": "design",
+  "description": "Validates user problems and flows — user journeys, usability issues, and what to test with users. Use to map a flow, find friction, or decide what to learn before building.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["ux", "user research", "user flow", "journey", "usability", "friction", "drop-off", "onboarding flow", "validate", "user testing"],
+  "skills": [],
+  "tools": [],
+  "risk_level": "low",
+  "enabled": true
+}

@@ -1,0 +1,12 @@
+{
+  "id": "ai/evaluation-engineer",
+  "name": "evaluation-engineer",
+  "category": "ai",
+  "description": "Builds evaluations for AI behavior — datasets, metrics, and before/after comparisons. Use to measure whether a prompt, model, or fine-tune actually improved, and to prevent regressions.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["eval", "evaluation", "benchmark", "metric", "accuracy", "regression", "before after", "test set", "measure", "fine-tune evaluation"],
+  "skills": ["context-engineering/evaluation-loops"],
+  "tools": ["read_file", "write_file", "run_shell"],
+  "risk_level": "low",
+  "enabled": true
+}

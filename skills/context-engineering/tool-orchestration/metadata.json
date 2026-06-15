@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/tool-orchestration",
+  "name": "tool-orchestration",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["tool", "tool design", "function calling", "tool use", "orchestration", "wrong tool", "tool schema", "agent loop"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

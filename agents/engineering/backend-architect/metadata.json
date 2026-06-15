@@ -1,0 +1,12 @@
+{
+  "id": "engineering/backend-architect",
+  "name": "backend-architect",
+  "category": "engineering",
+  "description": "Designs backend systems, APIs, data models, and service boundaries. Use for API/database design, scaling and reliability decisions, and architecture trade-offs before code is written.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["backend", "api", "database", "schema", "architecture", "scaling", "service", "data model", "migration", "queue", "endpoint"],
+  "skills": ["context-engineering/tool-orchestration"],
+  "tools": ["github_create_pull_request", "create_task"],
+  "risk_level": "medium",
+  "enabled": true
+}

@@ -1,0 +1,14 @@
+{
+  "id": "bug-fix",
+  "name": "Bug Fix Workflow",
+  "description": "Diagnose, fix, and regression-test a bug.",
+  "trigger_keywords": ["fix bug", "debug", "it's broken", "crash", "not working", "resolve error"],
+  "required_inputs": ["a reproduction or error", "the affected area"],
+  "stages": [
+    { "agent": "engineering/code-reviewer", "task": "Locate the root cause from the diff/error", "outputs": "root cause", "tools": ["read_file"] },
+    { "agent": "engineering/frontend-developer", "task": "Apply the minimal fix (or backend-architect for server-side)", "outputs": "fix diff", "tools": ["edit_file"] },
+    { "agent": "testing/qa-test-engineer", "task": "Add a regression test that fails before and passes after", "outputs": "regression test", "tools": ["write_file", "run_shell"] }
+  ],
+  "quality_checks": ["root cause identified (not just symptom)", "regression test added", "no new failures"],
+  "final_deliverable": "A minimal fix with a regression test."
+}

@@ -1,0 +1,18 @@
+{
+  "id": "feature-build",
+  "name": "Feature Build Workflow",
+  "description": "Take a feature from idea to production-ready, orchestrator–worker style.",
+  "trigger_keywords": ["build feature", "from idea to production", "ship a feature", "end to end", "build this feature"],
+  "required_inputs": ["a feature idea or goal", "any constraints (scale, deadline, platform)"],
+  "stages": [
+    { "agent": "product/product-manager", "task": "Define the problem, MVP scope, acceptance criteria, and non-goals", "outputs": "one-page spec", "tools": ["create_task"] },
+    { "agent": "design/ux-researcher", "task": "Map the user flow and flag friction/assumptions", "outputs": "user journey + hypotheses" },
+    { "agent": "engineering/backend-architect", "task": "Design the API contract, data model, and failure modes", "outputs": "API + schema + ADR note", "tools": ["github_create_pull_request"] },
+    { "agent": "engineering/frontend-developer", "task": "Implement the UI against the design and contract", "outputs": "working UI diff", "tools": ["edit_file", "write_file"] },
+    { "agent": "testing/qa-test-engineer", "task": "Write acceptance tests and find coverage gaps", "outputs": "tests + gap note", "tools": ["write_file", "run_shell"] },
+    { "agent": "security/security-engineer", "task": "Review for vulnerabilities and unsafe data flows", "outputs": "prioritized findings + go/no-go" },
+    { "agent": "strategy/reality-checker", "task": "Confirm production readiness (rollback, monitoring, cost)", "outputs": "readiness verdict" }
+  ],
+  "quality_checks": ["acceptance criteria are testable", "tests pass", "no Critical security findings", "rollback path exists"],
+  "final_deliverable": "A reviewed, tested, production-ready feature with a go/no-go verdict."
+}

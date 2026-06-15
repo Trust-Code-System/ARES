@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/evaluation-loops",
+  "name": "evaluation-loops",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["evaluation", "eval", "llm as judge", "test agent", "regression", "debug agent", "rubric", "benchmark", "harness"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

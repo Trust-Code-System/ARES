@@ -1,0 +1,14 @@
+{
+  "id": "ui-ux/premium-product-design",
+  "name": "premium-product-design",
+  "category": "ui-ux",
+  "source_repo": "nextlevelbuilder/ui-ux-pro-max-skill (MIT)",
+  "trigger_keywords": [
+    "premium", "high-end", "polish", "refined", "expensive", "luxury", "looks cheap",
+    "micro-interaction", "spacing", "typography", "hierarchy", "design critique"
+  ],
+  "required_tools": ["write_file", "read_file"],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

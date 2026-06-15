@@ -1,0 +1,23 @@
+{
+  "name": "jarvis-routing",
+  "version": "1.0.0",
+  "meta": {
+    "description": "Intent + agent/skill/tool routing examples for ARES. Structured-output target.",
+    "taskType": "routing",
+    "sourceNote": "Hand-authored from ARES agent metadata and the project routing eval. No user data."
+  },
+  "examples": [
+    { "input": "Make my dashboard look more premium", "output": { "intent": "improve:design", "agent": "design/ui-designer", "supporting_agents": ["engineering/frontend-developer"], "skills": ["ui-ux/premium-product-design"], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "design"] },
+    { "input": "Check if this authentication system is safe", "output": { "intent": "review:security", "agent": "security/security-engineer", "supporting_agents": ["engineering/backend-architect", "strategy/reality-checker"], "skills": [], "tools": ["read_file"], "risk_level": "medium", "needs_confirmation": true }, "tags": ["routing", "security"] },
+    { "input": "Prepare data to fine-tune Jarvis tone", "output": { "intent": "build:ai", "agent": "ai/evaluation-engineer", "supporting_agents": ["ai/prompt-engineer"], "skills": ["context-engineering/evaluation-loops"], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "ai", "fine-tuning"] },
+    { "input": "Build a daily report scheduling feature from idea to production", "output": { "intent": "build:product", "agent": "product/product-manager", "supporting_agents": ["engineering/backend-architect", "engineering/frontend-developer"], "skills": ["product-team/code-to-prd"], "tools": ["create_task"], "risk_level": "medium", "needs_confirmation": true }, "tags": ["routing", "product", "workflow"] },
+    { "input": "Review this pull request before I merge", "output": { "intent": "review:engineering", "agent": "engineering/code-reviewer", "supporting_agents": [], "skills": [], "tools": ["github_get_pull_request"], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "engineering"] },
+    { "input": "Why does the API container crash on boot in production", "output": { "intent": "fix:engineering", "agent": "engineering/devops-engineer", "supporting_agents": ["engineering/backend-architect"], "skills": [], "tools": ["read_file", "run_shell"], "risk_level": "high", "needs_confirmation": true }, "tags": ["routing", "devops"] },
+    { "input": "Rewrite this landing page so it doesn't sound AI-generated", "output": { "intent": "write:marketing", "agent": "marketing/copywriter", "supporting_agents": [], "skills": ["writing/stop-slop"], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "marketing"] },
+    { "input": "How do I get my first 100 users for my SaaS", "output": { "intent": "plan:marketing", "agent": "marketing/growth-strategist", "supporting_agents": ["marketing/copywriter"], "skills": ["marketing-haines/marketing-plan"], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "growth"] },
+    { "input": "Write tests for this scheduling function", "output": { "intent": "test:testing", "agent": "testing/qa-test-engineer", "supporting_agents": [], "skills": [], "tools": ["write_file", "run_shell"], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "testing"] },
+    { "input": "Should this feature use RAG, memory, or fine-tuning", "output": { "intent": "plan:ai", "agent": "ai/agent-architect", "supporting_agents": ["ai/prompt-engineer"], "skills": ["context-engineering/rag-strategy", "context-engineering/memory-design"], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "ai"] },
+    { "input": "Map the onboarding flow and find where users drop off", "output": { "intent": "review:design", "agent": "design/ux-researcher", "supporting_agents": ["design/ui-designer"], "skills": [], "tools": [], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "ux"] },
+    { "input": "Is this feature production-ready", "output": { "intent": "review:strategy", "agent": "strategy/reality-checker", "supporting_agents": ["security/security-engineer", "testing/qa-test-engineer"], "skills": [], "tools": ["read_file"], "risk_level": "low", "needs_confirmation": false }, "tags": ["routing", "strategy"] }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "engineering/devops-engineer",
+  "name": "devops-engineer",
+  "category": "engineering",
+  "description": "Handles deployment, CI/CD, containers, and infrastructure reliability. Use for Docker/compose, build pipelines, environment config, and deploy/runtime troubleshooting.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["devops", "deploy", "deployment", "docker", "compose", "ci", "cd", "pipeline", "infrastructure", "container", "rollback", "vps", "vercel"],
+  "skills": [],
+  "tools": ["run_shell", "read_file", "edit_file"],
+  "risk_level": "high",
+  "enabled": true
+}

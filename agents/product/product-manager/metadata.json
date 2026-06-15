@@ -1,0 +1,12 @@
+{
+  "id": "product/product-manager",
+  "name": "product-manager",
+  "category": "product",
+  "description": "Clarifies what to build and why — requirements, scope, acceptance criteria, and priorities. Use to turn a vague idea into a crisp, buildable spec, or to decide what to cut.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["product", "requirements", "spec", "scope", "acceptance criteria", "mvp", "feature", "prioritize", "roadmap", "prd", "user story"],
+  "skills": ["product-team/code-to-prd"],
+  "tools": ["create_task", "list_tasks"],
+  "risk_level": "low",
+  "enabled": true
+}

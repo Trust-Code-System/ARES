@@ -1,0 +1,12 @@
+{
+  "id": "strategy/reality-checker",
+  "name": "reality-checker",
+  "category": "strategy",
+  "description": "Pressure-tests plans and 'is it ready?' claims — production readiness, hidden risks, cost, and overconfidence. Use before launch or before committing to a decision, to hear the honest downside.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["reality check", "production ready", "production-ready", "launch", "risk", "ready to ship", "will this fail", "go/no-go", "readiness", "cost", "downside"],
+  "skills": [],
+  "tools": ["read_file"],
+  "risk_level": "low",
+  "enabled": true
+}

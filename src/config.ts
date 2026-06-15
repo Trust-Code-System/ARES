@@ -92,8 +92,22 @@ export interface Config {
   shell: ShellConfig;
   python: PythonConfig;
   systemActionsEnabled: boolean;
+  /** Remotion video scaffolder (off unless ARES_REMOTION_ENABLED=true). */
+  remotionEnabled: boolean;
   /** Trading tools (off unless ARES_TRADING_ENABLED=true) + broker selection. */
   trading: BrokerConfig;
+  /**
+   * Absolute path to the vendored expert skill library. Empty string when the
+   * library is disabled (ARES_SKILLS_ENABLED=false) — find_skill/use_skill are
+   * then not registered.
+   */
+  skillsDir: string;
+  /**
+   * Absolute path to the specialist-agent (persona) library. Empty string when
+   * disabled (ARES_AGENTS_ENABLED=false) — find_agent/use_agent/agent_route are
+   * then not registered.
+   */
+  agentsDir: string;
 }
 
 export function loadConfig(): Config {
@@ -203,8 +217,35 @@ export function loadConfig(): Config {
     shell: parseShellConfig(),
     python: parsePythonConfig(),
     systemActionsEnabled: process.env.ARES_SYSTEM_ACTIONS_ENABLED === 'true',
+    remotionEnabled: process.env.ARES_REMOTION_ENABLED === 'true',
     trading: parseTradingConfig(),
+    skillsDir: parseSkillsDir(),
+    agentsDir: parseAgentsDir(),
   };
+}
+
+/**
+ * Resolve the specialist-agent library directory. Enabled by default; set
+ * ARES_AGENTS_ENABLED=false to turn the find_agent/use_agent/agent_route tools
+ * off (returns an empty string, treated as "not configured").
+ */
+export function parseAgentsDir(): string {
+  if (['false', '0', 'off', 'no'].includes((process.env.ARES_AGENTS_ENABLED ?? '').toLowerCase())) {
+    return '';
+  }
+  return path.resolve(process.env.ARES_AGENTS_DIR ?? './agents');
+}
+
+/**
+ * Resolve the expert skill library directory. Enabled by default; set
+ * ARES_SKILLS_ENABLED=false to turn the find_skill/use_skill tools off (returns
+ * an empty string, which the composition roots treat as "not configured").
+ */
+export function parseSkillsDir(): string {
+  if (['false', '0', 'off', 'no'].includes((process.env.ARES_SKILLS_ENABLED ?? '').toLowerCase())) {
+    return '';
+  }
+  return path.resolve(process.env.ARES_SKILLS_DIR ?? './skills');
 }
 
 export function parsePythonConfig(): PythonConfig {

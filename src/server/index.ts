@@ -12,6 +12,7 @@ import { ConsoleLogger } from '../logging/logger.js';
 import { buildLlmClient } from '../llm/factory.js';
 import { buildVisionExtractor } from '../llm/vision.js';
 import { createDefaultRegistry } from '../tools/index.js';
+import { SKILLS_PROMPT_NOTE } from '../skills/index.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
 import { buildBrokerProvider } from '../tools/builtin/trading.js';
 import { buildGithubClient } from '../tools/builtin/github.js';
@@ -86,12 +87,14 @@ async function main(): Promise<void> {
     shell: config.shell,
     python: config.python,
     systemActionsEnabled: config.systemActionsEnabled,
+    remotionEnabled: config.remotionEnabled,
     ...(tradingProvider ? { tradingProvider } : {}),
     ...(githubClient ? { githubClient } : {}),
     structuredStore: memory.structured,
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
     taskStore: tasks,
+    ...(config.skillsDir ? { skills: { dir: config.skillsDir } } : {}),
     extraTools: mcp.tools,
   });
 
@@ -109,7 +112,7 @@ async function main(): Promise<void> {
     memoryWriter: memory.memoryWriter,
     logger,
     audit: memory.audit,
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: config.skillsDir ? `${SYSTEM_PROMPT}\n- ${SKILLS_PROMPT_NOTE}` : SYSTEM_PROMPT,
     maxIterations: config.maxIterations,
     enableFastChat: config.enableFastChat,
   });

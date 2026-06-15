@@ -1,0 +1,14 @@
+{
+  "id": "ui-ux/accessibility-responsive",
+  "name": "accessibility-responsive",
+  "category": "ui-ux",
+  "source_repo": "nextlevelbuilder/ui-ux-pro-max-skill (MIT)",
+  "trigger_keywords": [
+    "accessibility", "a11y", "wcag", "contrast", "keyboard", "screen reader",
+    "aria", "responsive", "mobile", "breakpoint", "focus", "reduced motion"
+  ],
+  "required_tools": ["write_file", "read_file"],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "security-review",
+  "name": "Security Review Workflow",
+  "description": "Assess a flow or change for vulnerabilities and confirm it is safe to ship.",
+  "trigger_keywords": ["security review", "is this safe", "check auth", "vulnerability", "pentest", "review security"],
+  "required_inputs": ["the flow/code to assess", "the trust boundaries (who can call it)"],
+  "stages": [
+    { "agent": "security/security-engineer", "task": "Map attack surface; report vulnerabilities by severity with fixes", "outputs": "prioritized findings", "tools": ["read_file"] },
+    { "agent": "engineering/backend-architect", "task": "Validate proposed fixes against the design", "outputs": "fix validation" },
+    { "agent": "strategy/reality-checker", "task": "Decide go/no-go given residual risk", "outputs": "verdict" }
+  ],
+  "quality_checks": ["no unaddressed Critical/High findings", "secrets handled via env", "authz boundaries verified"],
+  "final_deliverable": "A vulnerability report with fixes and a go/no-go verdict."
+}

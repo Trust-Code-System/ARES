@@ -1,0 +1,11 @@
+{
+  "id": "context-engineering/memory-design",
+  "name": "memory-design",
+  "category": "context-engineering",
+  "source_repo": "muratcankoylan/Agent-Skills-for-Context-Engineering (MIT)",
+  "trigger_keywords": ["memory", "long-term memory", "vector store", "recall", "forgets", "persistence", "knowledge base", "embeddings"],
+  "required_tools": [],
+  "risk_level": "low",
+  "enabled": true,
+  "version": "1.0.0"
+}

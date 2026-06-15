@@ -1,0 +1,12 @@
+{
+  "id": "marketing/copywriter",
+  "name": "copywriter",
+  "category": "marketing",
+  "description": "Writes clear, persuasive, human marketing and product copy — landing pages, emails, ads, microcopy. Use to draft or sharpen copy that sounds human, not AI-generated, and drives one clear action.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["copy", "copywriting", "headline", "landing page", "email copy", "ad", "cta", "tagline", "rewrite", "microcopy", "ai-generated", "sound human"],
+  "skills": ["writing/stop-slop", "marketing-haines/copywriting", "marketing-haines/copy-editing"],
+  "tools": [],
+  "risk_level": "low",
+  "enabled": true
+}

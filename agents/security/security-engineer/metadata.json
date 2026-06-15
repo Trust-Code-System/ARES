@@ -1,0 +1,12 @@
+{
+  "id": "security/security-engineer",
+  "name": "security-engineer",
+  "category": "security",
+  "description": "Reviews systems and code for security vulnerabilities — auth, secrets, injection, access control, and data exposure. Use to assess whether something is safe before it ships.",
+  "source_repo": "agency-agents",
+  "trigger_keywords": ["security", "secure", "vulnerability", "auth", "authentication", "authorization", "injection", "ssrf", "secret", "exploit", "threat", "pentest", "safe"],
+  "skills": [],
+  "tools": ["read_file", "github_get_pull_request"],
+  "risk_level": "medium",
+  "enabled": true
+}
