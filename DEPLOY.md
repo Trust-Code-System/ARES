@@ -1,5 +1,10 @@
 # Deploying ARES (single VPS, Docker Compose)
 
+> **Hosting the web UI on Vercel instead?** See [VERCEL.md](VERCEL.md) — the API
+> still needs a persistent host (it can't run on Vercel serverless), so you run
+> [docker-compose.api.yml](docker-compose.api.yml) here for the API and let Vercel
+> serve `web/`.
+
 This brings up four containers on one server:
 
 | Service     | What it is                                  | Exposed |

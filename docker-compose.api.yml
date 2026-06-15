@@ -1,0 +1,74 @@
+# API-only stack for the VPS when the web UI is hosted on Vercel.
+# Runs the API server + Dragonfly + Caddy (TLS for the api subdomain only).
+#
+#   docker compose -f docker-compose.api.yml up -d --build
+#
+# DNS: point api.${ARES_DOMAIN} at this server. Postgres stays external
+# (DATABASE_URL in .env). Set ARES_WEB_ORIGIN to your Vercel URL(s) for CORS.
+
+services:
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    restart: unless-stopped
+    command: ["--logtostderr", "--dir", "/data", "--dbfilename", "ares-dump"]
+    ulimits:
+      memlock: -1
+    volumes:
+      - dragonfly-data:/data
+    networks:
+      - ares
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ARES_API_HOST: 0.0.0.0
+      ARES_API_PORT: "3001"
+      # Browser origin(s) allowed by CORS = your Vercel deployment URL(s).
+      # Comma-separated, no trailing slash, e.g.
+      #   https://ares.vercel.app,https://ares.yourdomain.com
+      ARES_API_ORIGINS: "${ARES_WEB_ORIGIN}"
+      REDIS_URL: "redis://dragonfly:6379"
+      ARES_WORKSPACE_DIR: /data/workspace
+    volumes:
+      - ares-workspace:/data/workspace
+    depends_on:
+      - dragonfly
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - ares
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ARES_DOMAIN: "${ARES_DOMAIN}"
+    volumes:
+      - ./Caddyfile.api:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    networks:
+      - ares
+
+networks:
+  ares:
+
+volumes:
+  dragonfly-data:
+  ares-workspace:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,9 @@
+# API-only reverse proxy (web is hosted on Vercel).
+#   https://api.${ARES_DOMAIN} → api:3001  (with SSE streaming)
+
+api.{$ARES_DOMAIN} {
+	reverse_proxy api:3001 {
+		# Don't buffer the chat Server-Sent Events stream.
+		flush_interval -1
+	}
+}

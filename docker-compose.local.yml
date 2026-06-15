@@ -1,0 +1,52 @@
+# Local self-contained run — NO domain, NO external DB, NO Caddy.
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+# Then open http://localhost:3000  (API on http://localhost:3001).
+#
+# Brings up its own throwaway pgvector Postgres so it never touches your real
+# DATABASE_URL. Publishes the app ports directly and skips the TLS proxy.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ares
+      POSTGRES_PASSWORD: ares
+      POSTGRES_DB: ares
+    volumes:
+      - ares-local-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ares -d ares"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ares
+
+  api:
+    ports:
+      # 3081 on the host (3000/3001 are taken by the local dev servers).
+      - "3081:3001"
+    environment:
+      # Override the env_file DATABASE_URL so we use the local throwaway DB.
+      DATABASE_URL: "postgres://ares:ares@db:5432/ares?sslmode=disable"
+      ARES_API_ORIGINS: "http://localhost:3080,http://127.0.0.1:3080"
+    depends_on:
+      db:
+        condition: service_healthy
+      dragonfly:
+        condition: service_started
+
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_ARES_API: "http://localhost:3081"
+    ports:
+      - "3080:3000"
+
+  # No TLS proxy locally — park Caddy behind a profile so it doesn't start.
+  caddy:
+    profiles: ["disabled"]
+
+volumes:
+  ares-local-pg:

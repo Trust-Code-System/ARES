@@ -26,6 +26,22 @@ export interface Db {
   close(): Promise<void>;
 }
 
+/**
+ * Whether to open the pool over TLS. Off for loopback hosts and for any URL that
+ * asks for `sslmode=disable` (plain-text local or container-network Postgres);
+ * on otherwise (managed providers like Supabase require it).
+ */
+function useSsl(connectionString: string): boolean {
+  if (/sslmode=disable/i.test(connectionString)) return false;
+  try {
+    const { hostname } = new URL(connectionString);
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false;
+  } catch {
+    if (connectionString.includes('localhost')) return false;
+  }
+  return true;
+}
+
 export class PgDb implements Db {
   private readonly pool: pg.Pool;
 
@@ -36,7 +52,11 @@ export class PgDb implements Db {
       // also relax cert verification for the pooled connection string Supabase
       // hands out (a documented Supabase quirk, not a security downgrade for a
       // single-user system connecting to its own DB).
-      ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+      //
+      // Disable TLS for plain-text local/self-hosted Postgres — a loopback host
+      // or an explicit `sslmode=disable` (e.g. a Postgres container on the same
+      // Docker network, reached as `db`, which doesn't terminate TLS).
+      ssl: useSsl(connectionString) ? { rejectUnauthorized: false } : false,
       max: 8,
     });
   }
