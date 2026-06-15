@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import array
 import io
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import wave
+from collections import deque
 from pathlib import Path
 
 import requests
@@ -41,6 +44,46 @@ from PySide6.QtWidgets import (
 
 API_BASE = os.environ.get("ARES_API_URL", "http://127.0.0.1:3001").rstrip("/")
 MODES = ("general", "developer", "research", "business", "project", "document", "hr", "communications")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(float(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# --- Voice-activity-detection tuning ------------------------------------------
+# All times are milliseconds. The thresholds are *relative to a continuously
+# measured noise floor*, so a steady fan/AC hum is learned as "silence" and your
+# voice — which rises well above it — still triggers. Override via env vars.
+VAD_FRAME_MS = 30
+# How long after you stop talking before the turn is considered finished. Long
+# enough to ride out natural pauses ("um…", breaths) so it lets you finish.
+VAD_SILENCE_MS = _env_int("ARES_VAD_SILENCE_MS", 900)
+# Consecutive voiced time needed to latch on — rejects keyboard clicks/pops.
+VAD_ONSET_MS = _env_int("ARES_VAD_ONSET_MS", 120)
+# Audio kept *before* onset so the first word is never clipped ("pick up instantly").
+VAD_PREROLL_MS = _env_int("ARES_VAD_PREROLL_MS", 320)
+# Utterances shorter than this are discarded as noise, not sent for transcription.
+VAD_MIN_UTTERANCE_MS = _env_int("ARES_VAD_MIN_MS", 350)
+VAD_MAX_UTTERANCE_MS = _env_int("ARES_VAD_MAX_MS", 30_000)
+# Higher sensitivity → lower thresholds → picks up quieter speech (more false fires).
+VAD_SENSITIVITY = max(0.3, _env_float("ARES_VAD_SENSITIVITY", 1.0))
+# Speech must exceed noise_floor * ON_RATIO to start; drops below * OFF_RATIO to end.
+VAD_ON_RATIO = max(1.6, 3.2 / VAD_SENSITIVITY)
+VAD_OFF_RATIO = max(1.2, 1.8 / VAD_SENSITIVITY)
+# Absolute floor (normalised RMS) so dead-quiet rooms don't trigger on noise.
+VAD_ABS_MIN = 0.012 / VAD_SENSITIVITY
+# How fast the noise floor tracks ambient changes while no one is speaking.
+VAD_FLOOR_ADAPT = 0.04
 
 
 class ApiWorker(QObject):
@@ -154,37 +197,198 @@ class StatusWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class AudioRecorder(QObject):
+class VadRecorder(QObject):
+    """
+    Continuous microphone capture with energy-based voice-activity detection.
+
+    Two jobs:
+      * **Hands-free listening** (``start_vad``): runs forever, learns the ambient
+        noise floor (so a fan/AC hum reads as silence), starts capturing the moment
+        your voice rises above it — keeping a pre-roll so the first word isn't
+        clipped — and emits a finished utterance only after a sustained silence, so
+        brief pauses don't cut you off mid-thought.
+      * **Push-to-talk** (``start_manual``): captures everything until ``stop``.
+
+    Energy thresholds are *relative to the live noise floor*, which is what makes it
+    robust to constant background noise rather than a fixed cutoff.
+    """
+
+    utterance = Signal(bytes)
+    speech_started = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self.source: QAudioSource | None = None
         self.device = None
-        self.chunks: list[bytes] = []
+        self.listening = False
+        self.manual = False
         self.format = QAudioFormat()
         self.format.setSampleRate(16000)
         self.format.setChannelCount(1)
         self.format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        self._buf = bytearray()
+        self._reset_state()
 
-    def start(self) -> None:
-        self.chunks.clear()
+    def _reset_state(self) -> None:
+        self._frame_bytes = 0
+        self._frame_ms = VAD_FRAME_MS
+        self._preroll: deque[bytes] = deque()
+        self._captured: list[bytes] = []
+        self._in_speech = False
+        self._onset_ms = 0
+        self._silence_ms = 0
+        self._noise_floor = 0.01
+        self._calibrating = 0
+        self._emitted = False
+
+    # -- lifecycle -------------------------------------------------------------
+    def start_vad(self) -> None:
+        self._open(manual=False)
+
+    def start_manual(self) -> None:
+        self._open(manual=True)
+
+    def _open(self, manual: bool) -> None:
+        if self.listening:
+            return
         device = QMediaDevices.defaultAudioInput()
         if device.isNull():
             raise RuntimeError("No audio input device is available.")
-        if not device.isFormatSupported(self.format):
-            self.format = device.preferredFormat()
+        fmt = QAudioFormat()
+        fmt.setSampleRate(16000)
+        fmt.setChannelCount(1)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        if not device.isFormatSupported(fmt):
+            fmt = device.preferredFormat()
+        self.format = fmt
+        self._buf.clear()
+        self._reset_state()
+        self.manual = manual
+        bytes_per_sample = max(1, self.format.bytesPerSample())
+        frame_samples = max(1, int(self.format.sampleRate() * self._frame_ms / 1000))
+        self._frame_bytes = frame_samples * bytes_per_sample * max(1, self.format.channelCount())
+        self._preroll = deque(maxlen=max(1, VAD_PREROLL_MS // self._frame_ms))
+        self._calibrating = max(3, 300 // self._frame_ms)
         self.source = QAudioSource(device, self.format)
         self.device = self.source.start()
         self.device.readyRead.connect(self._read)
+        self.listening = True
 
     def stop(self) -> bytes:
-        if not self.source:
+        """Stop capture. In manual mode, return the recorded audio as WAV bytes."""
+        if not self.listening:
             return b""
         self._read()
-        self.source.stop()
-        self.source.deleteLater()
+        captured = b"".join(self._captured) if self.manual else b""
+        if self.source:
+            self.source.stop()
+            self.source.deleteLater()
         self.source = None
         self.device = None
-        raw = b"".join(self.chunks)
+        self.listening = False
+        self._buf.clear()
+        self._captured = []
+        return self._to_wav(captured) if captured else b""
+
+    # -- capture loop ----------------------------------------------------------
+    def _read(self) -> None:
+        if not self.device:
+            return
+        self._buf.extend(bytes(self.device.readAll()))
+        fb = self._frame_bytes
+        if fb <= 0:
+            return
+        while len(self._buf) >= fb:
+            frame = bytes(self._buf[:fb])
+            del self._buf[:fb]
+            if self.manual:
+                self._captured.append(frame)
+            else:
+                self._process_frame(frame)
+
+    def _process_frame(self, frame: bytes) -> None:
+        if self._emitted:
+            return
+        rms = self._rms(frame)
+        self._preroll.append(frame)
+
+        if self._calibrating > 0:
+            self._noise_floor = max(VAD_ABS_MIN, (self._noise_floor + rms) / 2)
+            self._calibrating -= 1
+            return
+
+        on_threshold = max(self._noise_floor * VAD_ON_RATIO, VAD_ABS_MIN)
+        off_threshold = max(self._noise_floor * VAD_OFF_RATIO, VAD_ABS_MIN * 0.6)
+
+        if not self._in_speech:
+            # Track ambient level while quiet so the fan's hum stays "silence".
+            if rms < on_threshold:
+                self._noise_floor = (1 - VAD_FLOOR_ADAPT) * self._noise_floor + VAD_FLOOR_ADAPT * rms
+                self._onset_ms = 0
+            else:
+                self._onset_ms += self._frame_ms
+                if self._onset_ms >= VAD_ONSET_MS:
+                    self._in_speech = True
+                    self._silence_ms = 0
+                    self._captured = list(self._preroll)  # pre-roll includes this frame
+                    self.speech_started.emit()
+            return
+
+        self._captured.append(frame)
+        if rms >= off_threshold:
+            self._silence_ms = 0
+        else:
+            self._silence_ms += self._frame_ms
+            if self._silence_ms >= VAD_SILENCE_MS:
+                self._finish_utterance()
+                return
+        if len(self._captured) * self._frame_ms >= VAD_MAX_UTTERANCE_MS:
+            self._finish_utterance()
+
+    def _finish_utterance(self) -> None:
+        frames = self._captured
+        self._captured = []
+        self._in_speech = False
+        self._onset_ms = 0
+        self._silence_ms = 0
+        # Drop the trailing hangover of pure silence before transcribing.
+        speech_ms = max(0, len(frames) * self._frame_ms - VAD_SILENCE_MS)
+        if speech_ms < VAD_MIN_UTTERANCE_MS:
+            return  # too short to be real speech — keep listening
+        self._emitted = True  # ignore further frames until the host stops/restarts us
+        self.utterance.emit(self._to_wav(b"".join(frames)))
+
+    # -- helpers ---------------------------------------------------------------
+    def _rms(self, frame: bytes) -> float:
+        sf = self.format.sampleFormat()
+        try:
+            if sf == QAudioFormat.SampleFormat.Int16:
+                samples = array.array("h")
+                samples.frombytes(frame[: len(frame) - len(frame) % 2])
+                if not samples:
+                    return 0.0
+                return math.sqrt(sum(v * v for v in samples) / len(samples)) / 32768.0
+            if sf == QAudioFormat.SampleFormat.Float:
+                samples = array.array("f")
+                samples.frombytes(frame[: len(frame) - len(frame) % 4])
+                if not samples:
+                    return 0.0
+                return math.sqrt(sum(v * v for v in samples) / len(samples))
+            if sf == QAudioFormat.SampleFormat.Int32:
+                samples = array.array("i")
+                samples.frombytes(frame[: len(frame) - len(frame) % 4])
+                if not samples:
+                    return 0.0
+                return math.sqrt(sum((v / 2147483648.0) ** 2 for v in samples) / len(samples))
+            if sf == QAudioFormat.SampleFormat.UInt8:
+                if not frame:
+                    return 0.0
+                return math.sqrt(sum((b - 128) ** 2 for b in frame) / len(frame)) / 128.0
+        except (ValueError, ZeroDivisionError):
+            return 0.0
+        return 0.0
+
+    def _to_wav(self, raw: bytes) -> bytes:
         output = io.BytesIO()
         with wave.open(output, "wb") as wav:
             wav.setnchannels(self.format.channelCount())
@@ -192,10 +396,6 @@ class AudioRecorder(QObject):
             wav.setframerate(self.format.sampleRate())
             wav.writeframes(raw)
         return output.getvalue()
-
-    def _read(self) -> None:
-        if self.device:
-            self.chunks.append(bytes(self.device.readAll()))
 
 
 class AvatarWidget(QWidget):
@@ -282,13 +482,21 @@ class MainWindow(QMainWindow):
         self.lines: list[str] = []
         self.answer_index = -1
         self.answer_text = ""
-        self.recording = False
-        self.recorder = AudioRecorder()
+        self.recording = False  # manual push-to-talk in progress
+        self.responding = False  # a turn is being transcribed/answered/spoken
+        self.answer_done = False  # the model has finished streaming this turn
+        self.recorder = VadRecorder()
+        self.recorder.utterance.connect(self._on_utterance)
         self.audio_output = QAudioOutput(self)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
-        self.player.playbackStateChanged.connect(self._playback_state)
-        self.current_audio_path: str | None = None
+        self.player.mediaStatusChanged.connect(self._media_status)
+        # Streaming TTS: sentences awaiting synthesis, audio files awaiting playback.
+        self._speak_queue: list[str] = []
+        self._audio_queue: list[str] = []
+        self._synth_busy = False
+        self._current_audio: str | None = None
+        self._tts_pending = ""  # partial sentence accumulated from streamed tokens
         self._build_ui()
         self._apply_style()
 
@@ -343,11 +551,15 @@ class MainWindow(QMainWindow):
         self.mode = QComboBox()
         self.mode.addItems(MODES)
         controls.addWidget(self.mode)
+        self.hands_free = QCheckBox("HANDS-FREE")
+        self.hands_free.setToolTip("Listen continuously and reply automatically — no clicking.")
+        self.hands_free.toggled.connect(self._toggle_hands_free)
+        controls.addWidget(self.hands_free)
         self.auto_speak = QCheckBox("AUTO VOICE")
         self.auto_speak.setChecked(True)
         controls.addWidget(self.auto_speak)
         self.interrupt = QPushButton("INTERRUPT")
-        self.interrupt.clicked.connect(self.stop_speaking)
+        self.interrupt.clicked.connect(self.barge_in)
         controls.addWidget(self.interrupt)
         controls.addStretch()
         right_layout.addLayout(controls)
@@ -420,13 +632,56 @@ class MainWindow(QMainWindow):
     def _status_failed(self) -> None:
         self.connection.setText("API LINK / OFFLINE")
 
+    # -- hands-free listening --------------------------------------------------
+    @Slot(bool)
+    def _toggle_hands_free(self, _enabled: bool) -> None:
+        self._update_listening()
+
+    def _update_listening(self) -> None:
+        """Single source of truth for whether the VAD mic should be running."""
+        should_listen = (
+            self.hands_free.isChecked()
+            and not self.responding
+            and not self.recording
+            and self._current_audio is None
+        )
+        if should_listen and not self.recorder.listening:
+            try:
+                self.recorder.start_vad()
+                self.avatar.set_state("listening")
+            except Exception as exc:
+                self.hands_free.setChecked(False)
+                self._request_failed(str(exc))
+        elif not should_listen and self.recorder.listening and not self.recording:
+            self.recorder.stop()
+            if self.avatar.state == "listening":
+                self.avatar.set_state("idle")
+
+    @Slot(bytes)
+    def _on_utterance(self, wav_data: bytes) -> None:
+        # A complete hands-free utterance arrived. Stop the mic and answer it.
+        if self.responding or self.recording:
+            return
+        self.recorder.stop()
+        if not wav_data:
+            self._update_listening()
+            return
+        self.responding = True
+        self.avatar.set_state("thinking")
+        worker = TranscriptionWorker(wav_data)
+        worker.finished.connect(self._transcript_ready)
+        worker.failed.connect(self._request_failed)
+        self._start_worker(worker)
+
     @Slot()
     def send_message(self, text: str | None = None) -> None:
         prompt = (text if text is not None else self.input.text()).strip()
         if not prompt:
             return
-        self.stop_speaking()
+        self._reset_speech()
         self.input.clear()
+        self.responding = True
+        self.answer_done = False
         self.lines.extend([f"YOU > {prompt}", "ARES > "])
         self.answer_index = len(self.lines) - 1
         self.answer_text = ""
@@ -447,6 +702,7 @@ class MainWindow(QMainWindow):
         if self.answer_index >= 0:
             self.lines[self.answer_index] = f"ARES > {self.answer_text}"
         self._render_transcript()
+        self._feed_speech(token)
 
     @Slot(str)
     def _append_activity(self, line: str) -> None:
@@ -455,18 +711,29 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _answer_finished(self, answer: str) -> None:
         self._set_busy(False)
-        self.avatar.set_state("idle")
+        self.answer_done = True
         final = answer or self.answer_text
-        if final and self.auto_speak.isChecked():
-            self.speak(final)
+        if self.auto_speak.isChecked():
+            # Flush whatever sentence fragment is still buffered, then let the
+            # playback queue drain and resume listening when it's empty.
+            self._flush_speech()
+            self._check_done()
+        else:
+            self.responding = False
+            self.avatar.set_state("idle")
+            self._update_listening()
 
     @Slot(str)
     def _request_failed(self, message: str) -> None:
         self._set_busy(False)
+        self.responding = False
+        self.answer_done = True
         self.avatar.set_state("error")
         if self.answer_index >= 0:
             self.lines[self.answer_index] = f"ARES > SYSTEM ERROR: {message}"
         self._render_transcript()
+        # After surfacing the error, pick listening back up if hands-free is on.
+        QTimer.singleShot(1200, self._update_listening)
 
     @Slot()
     def toggle_recording(self) -> None:
@@ -474,6 +741,7 @@ class MainWindow(QMainWindow):
             wav_data = self.recorder.stop()
             self.recording = False
             self.mic.setText("PUSH TO TALK")
+            self.responding = True
             self.avatar.set_state("thinking")
             worker = TranscriptionWorker(wav_data)
             worker.finished.connect(self._transcript_ready)
@@ -481,12 +749,15 @@ class MainWindow(QMainWindow):
             self._start_worker(worker)
             return
         try:
-            self.stop_speaking()
-            self.recorder.start()
+            self.barge_in()
+            if self.recorder.listening:
+                self.recorder.stop()  # drop hands-free VAD; manual takes the mic
+            self.recorder.start_manual()
             self.recording = True
             self.mic.setText("STOP / SEND")
             self.avatar.set_state("listening")
         except Exception as exc:
+            self.recording = False
             self._request_failed(str(exc))
 
     @Slot(str)
@@ -494,38 +765,120 @@ class MainWindow(QMainWindow):
         if text:
             self.send_message(text)
         else:
-            self._request_failed("No speech was detected.")
+            # Nothing intelligible — don't error out in hands-free, just listen again.
+            self.responding = False
+            if self.hands_free.isChecked():
+                self.avatar.set_state("idle")
+                self._update_listening()
+            else:
+                self._request_failed("No speech was detected.")
 
-    def speak(self, text: str) -> None:
-        self.avatar.set_state("thinking")
-        worker = SpeechWorker(text)
-        worker.finished.connect(self._play_audio)
-        worker.failed.connect(self._request_failed)
+    # -- streaming text-to-speech ---------------------------------------------
+    def _feed_speech(self, token: str) -> None:
+        """Accumulate streamed tokens and emit complete sentences to be spoken."""
+        if not self.auto_speak.isChecked():
+            return
+        self._tts_pending += token
+        sentences, self._tts_pending = _split_sentences(self._tts_pending)
+        for sentence in sentences:
+            self._enqueue_speech(sentence)
+
+    def _flush_speech(self) -> None:
+        remainder = self._tts_pending.strip()
+        self._tts_pending = ""
+        if remainder:
+            self._enqueue_speech(remainder)
+
+    def _enqueue_speech(self, sentence: str) -> None:
+        spoken = _clean_for_speech(sentence)
+        if not spoken:
+            return
+        self._speak_queue.append(spoken)
+        self._pump_synth()
+
+    def _pump_synth(self) -> None:
+        # Synthesize one sentence at a time; the next is prepared while the current
+        # one plays, so the first words are heard almost immediately.
+        if self._synth_busy or not self._speak_queue:
+            return
+        sentence = self._speak_queue.pop(0)
+        self._synth_busy = True
+        worker = SpeechWorker(sentence)
+        worker.finished.connect(self._synth_done)
+        worker.failed.connect(self._synth_failed)
         self._start_worker(worker)
 
     @Slot(str)
-    def _play_audio(self, path: str) -> None:
-        self.stop_speaking()
-        self.current_audio_path = path
+    def _synth_done(self, path: str) -> None:
+        self._synth_busy = False
+        self._audio_queue.append(path)
+        self._play_next()
+        self._pump_synth()
+        self._check_done()
+
+    @Slot(str)
+    def _synth_failed(self, message: str) -> None:
+        self._synth_busy = False
+        self.activity.appendPlainText(f"TTS ERROR  {message}")
+        self._pump_synth()
+        self._check_done()
+
+    def _play_next(self) -> None:
+        if self._current_audio is not None or not self._audio_queue:
+            return
+        path = self._audio_queue.pop(0)
+        self._current_audio = path
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.play()
         self.avatar.set_state("speaking")
 
     @Slot()
-    def stop_speaking(self) -> None:
-        self.player.stop()
-        self.avatar.set_state("idle")
-        if self.current_audio_path:
+    def _media_status(self, status) -> None:
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._drop_current_audio()
+            self._play_next()
+            self._check_done()
+
+    def _drop_current_audio(self) -> None:
+        if self._current_audio:
             try:
-                Path(self.current_audio_path).unlink(missing_ok=True)
+                Path(self._current_audio).unlink(missing_ok=True)
             except OSError:
                 pass
-            self.current_audio_path = None
+            self._current_audio = None
+
+    def _check_done(self) -> None:
+        """When the answer is fully spoken, return to idle/listening."""
+        if not self.responding or not self.answer_done:
+            return
+        if self._speak_queue or self._audio_queue or self._synth_busy or self._current_audio:
+            return
+        self.responding = False
+        self.avatar.set_state("idle")
+        self._update_listening()
+
+    def _reset_speech(self) -> None:
+        self.player.stop()
+        self._drop_current_audio()
+        for path in self._audio_queue:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._audio_queue.clear()
+        self._speak_queue.clear()
+        self._synth_busy = False
+        self._tts_pending = ""
 
     @Slot()
-    def _playback_state(self, state) -> None:
-        if state == QMediaPlayer.PlaybackState.StoppedState and self.avatar.state == "speaking":
-            self.stop_speaking()
+    def barge_in(self) -> None:
+        """Stop speaking immediately and (if hands-free) start listening again."""
+        self._reset_speech()
+        self.answer_done = True
+        self.responding = False
+        if self.avatar.state in {"speaking", "thinking"}:
+            self.avatar.set_state("idle")
+        self._update_listening()
 
     def _render_transcript(self) -> None:
         self.transcript.setPlainText("\n\n".join(self.lines))
@@ -552,10 +905,61 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self.recording:
+        if self.recorder.listening:
             self.recorder.stop()
-        self.stop_speaking()
+        self._reset_speech()
         super().closeEvent(event)
+
+
+_TERMINATORS = ".!?。！？"
+
+
+def _split_sentences(text: str) -> tuple[list[str], str]:
+    """
+    Pull complete sentences out of a growing token buffer; return (sentences, rest).
+
+    A sentence ends at terminator punctuation *followed by whitespace* (or a
+    newline). Requiring the trailing space keeps decimals like "3.14" intact and,
+    during streaming, defers a sentence whose terminator is the last char so far
+    until the next token confirms the boundary.
+    """
+    sentences: list[str] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            chunk = text[start:i].strip()
+            if chunk:
+                sentences.append(chunk)
+            start = i + 1
+        elif ch in _TERMINATORS:
+            j = i
+            while j + 1 < n and text[j + 1] in _TERMINATORS:
+                j += 1
+            nxt = text[j + 1] if j + 1 < n else ""
+            if nxt == "":
+                break  # terminator at buffer end — wait for the next token
+            if nxt.isspace():
+                chunk = text[start:j + 1].strip()
+                if chunk:
+                    sentences.append(chunk)
+                start = j + 1
+                i = j
+        i += 1
+    return sentences, text[start:]
+
+
+_MARKDOWN_NOISE = re.compile(r"[*_`#>]+")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
+def _clean_for_speech(text: str) -> str:
+    """Strip markdown so the synthesizer reads words, not symbols."""
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MARKDOWN_NOISE.sub("", text)
+    return text.strip()
 
 
 def main() -> int:

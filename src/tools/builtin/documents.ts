@@ -56,12 +56,47 @@ export function createDocumentTools(opts: DocumentToolsOptions): Tool[] {
 }
 
 /** Truncate extracted text to the output cap, with a clear marker. */
-function clamp(text: string): { content: string; truncated: boolean } {
+export function clampExtractedText(text: string): { content: string; truncated: boolean } {
   if (text.length <= MAX_OUTPUT_CHARS) return { content: text, truncated: false };
   return {
     content: `${text.slice(0, MAX_OUTPUT_CHARS)}\n\n[...truncated: extracted text exceeded ${MAX_OUTPUT_CHARS} characters]`,
     truncated: true,
   };
+}
+
+/** Pure PDF→text extraction from bytes (shared by the tool and the upload endpoint). */
+export async function extractPdfText(buf: Buffer): Promise<{ text: string; pages: number }> {
+  // pdf-parse v2: dynamic import so its pdfjs dependency loads only when used.
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: new Uint8Array(buf) });
+  try {
+    const result = await parser.getText();
+    return { text: result.text.trim(), pages: result.pages.length };
+  } finally {
+    await parser.destroy();
+  }
+}
+
+/** Pure DOCX→raw-text extraction from bytes. */
+export async function extractDocxText(buf: Buffer): Promise<{ text: string; warnings: string[] }> {
+  const mammoth = await import('mammoth');
+  const { value, messages } = await mammoth.extractRawText({ buffer: buf });
+  return { text: value.trim(), warnings: messages.map((m) => m.message) };
+}
+
+/** Pure spreadsheet→CSV extraction from bytes; returns sheet metadata or a readable error. */
+export async function extractSpreadsheetCsv(
+  buf: Buffer,
+  sheet?: string,
+): Promise<{ csv: string; sheet: string; sheets: string[] } | { error: string }> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const sheetNames = wb.SheetNames;
+  if (sheetNames.length === 0) return { error: 'workbook contains no sheets' };
+  const target = sheet ?? sheetNames[0]!;
+  const ws = wb.Sheets[target];
+  if (!ws) return { error: `no sheet named "${target}". Available sheets: ${sheetNames.join(', ')}.` };
+  return { csv: XLSX.utils.sheet_to_csv(ws).trim(), sheet: target, sheets: sheetNames };
 }
 
 function pdfTool(readBytes: (p: string) => Promise<Buffer>): Tool {
@@ -75,27 +110,18 @@ function pdfTool(readBytes: (p: string) => Promise<Buffer>): Tool {
     schema: z.object({ path: z.string().describe('Workspace-relative path to a .pdf file.') }),
     async execute(input): Promise<ToolResult> {
       const buf = await readBytes(input.path);
-      // pdf-parse v2: dynamic import so its pdfjs dependency loads only when used.
-      const { PDFParse } = await import('pdf-parse');
-      const parser = new PDFParse({ data: new Uint8Array(buf) });
-      try {
-        const result = await parser.getText();
-        const pageCount = result.pages.length;
-        const text = result.text.trim();
-        if (!text) {
-          return {
-            ok: true,
-            content:
-              '(no extractable text — the PDF has no text layer. If it is a scan, render a page to ' +
-              'an image and use extract_image_text instead.)',
-            data: { path: input.path, pages: pageCount, empty: true },
-          };
-        }
-        const { content, truncated } = clamp(text);
-        return { ok: true, content, data: { path: input.path, pages: pageCount, truncated } };
-      } finally {
-        await parser.destroy();
+      const { text, pages } = await extractPdfText(buf);
+      if (!text) {
+        return {
+          ok: true,
+          content:
+            '(no extractable text — the PDF has no text layer. If it is a scan, render a page to ' +
+            'an image and use extract_image_text instead.)',
+          data: { path: input.path, pages, empty: true },
+        };
       }
+      const { content, truncated } = clampExtractedText(text);
+      return { ok: true, content, data: { path: input.path, pages, truncated } };
     },
   });
 }
@@ -110,18 +136,12 @@ function docxTool(readBytes: (p: string) => Promise<Buffer>): Tool {
     schema: z.object({ path: z.string().describe('Workspace-relative path to a .docx file.') }),
     async execute(input): Promise<ToolResult> {
       const buf = await readBytes(input.path);
-      const mammoth = await import('mammoth');
-      const { value, messages } = await mammoth.extractRawText({ buffer: buf });
-      const text = value.trim();
+      const { text, warnings } = await extractDocxText(buf);
       if (!text) {
         return { ok: true, content: '(no text content found in document)', data: { path: input.path, empty: true } };
       }
-      const { content, truncated } = clamp(text);
-      return {
-        ok: true,
-        content,
-        data: { path: input.path, truncated, warnings: messages.map((m) => m.message) },
-      };
+      const { content, truncated } = clampExtractedText(text);
+      return { ok: true, content, data: { path: input.path, truncated, warnings } };
     },
   });
 }
@@ -140,30 +160,14 @@ function spreadsheetTool(readBytes: (p: string) => Promise<Buffer>): Tool {
     }),
     async execute(input): Promise<ToolResult> {
       const buf = await readBytes(input.path);
-      const XLSX = await import('xlsx');
-      const wb = XLSX.read(buf, { type: 'buffer' });
-      const sheetNames = wb.SheetNames;
-      if (sheetNames.length === 0) {
-        return { ok: false, content: 'workbook contains no sheets' };
-      }
-      const target = input.sheet ?? sheetNames[0]!;
-      const ws = wb.Sheets[target];
-      if (!ws) {
-        return {
-          ok: false,
-          content: `no sheet named "${target}". Available sheets: ${sheetNames.join(', ')}.`,
-        };
-      }
-      const csv = XLSX.utils.sheet_to_csv(ws).trim();
+      const result = await extractSpreadsheetCsv(buf, input.sheet);
+      if ('error' in result) return { ok: false, content: result.error };
+      const { csv, sheet, sheets } = result;
       if (!csv) {
-        return { ok: true, content: '(sheet is empty)', data: { path: input.path, sheet: target, sheets: sheetNames } };
+        return { ok: true, content: '(sheet is empty)', data: { path: input.path, sheet, sheets } };
       }
-      const { content, truncated } = clamp(csv);
-      return {
-        ok: true,
-        content,
-        data: { path: input.path, sheet: target, sheets: sheetNames, truncated },
-      };
+      const { content, truncated } = clampExtractedText(csv);
+      return { ok: true, content, data: { path: input.path, sheet, sheets, truncated } };
     },
   });
 }
@@ -202,7 +206,7 @@ function imageTool(
         { base64: buf.toString('base64'), mediaType },
         input.instructions,
       );
-      const { content, truncated } = clamp(text || '(no text detected)');
+      const { content, truncated } = clampExtractedText(text || '(no text detected)');
       return { ok: true, content, data: { path: input.path, truncated } };
     },
   });

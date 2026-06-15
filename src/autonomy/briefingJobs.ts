@@ -22,11 +22,13 @@ export const INBOX_SCAN_CRON = '0 * * * *'; // top of every hour
 export const WEEKLY_PROJECT_REPORT_CRON = '0 8 * * 1'; // 08:00 local, Mondays
 
 const BRIEFING_PROMPT = `Produce the principal's morning briefing for today. Use the tools available to you to gather, in this order:
-1. Today's calendar events (any calendar tool).
-2. A short summary of unread or important email since yesterday evening (any email tool).
-3. Overnight news on the principal's tracked topics (use web_search; if you don't know the topics, infer them from memory or skip this section).
-4. Anything the principal previously asked you to flag (check memory).
-Then send the briefing to the principal with the notify tool: concise and scannable — calendar first, then anything urgent in mail, then news. If a needed capability isn't available, note the gap in one line and continue; never fail the whole briefing over one missing tool.`;
+1. Today's local weather (use web_search; infer the principal's location from memory, and skip this section if it's unknown).
+2. Today's calendar events (any calendar tool).
+3. The day's tasks (use list_tasks): anything due today, overdue, or in progress.
+4. A short summary of unread or important email since yesterday evening (any email tool).
+5. Overnight news on the principal's tracked topics (use web_search; if you don't know the topics, infer them from memory or skip this section).
+6. Anything the principal previously asked you to flag (check memory).
+Then send the briefing to the principal with the notify tool: concise and scannable — open with a one-line greeting, then weather, calendar, and tasks, then anything urgent in mail, then news. Write it to be read aloud (it may be spoken via text-to-speech): natural sentences, no markdown tables or bullet symbols. If a needed capability isn't available, note the gap in one line and continue; never fail the whole briefing over one missing tool.`;
 
 const INBOX_SCAN_PROMPT = `Scan the principal's inbox for messages received in roughly the last hour that are urgent or actionable. Use the available email tools. If you find something genuinely urgent or needing a timely response, notify the principal with a one-paragraph summary including sender and subject. If nothing qualifies, do NOT notify — simply reply that nothing urgent was found. Be conservative: only escalate what truly warrants interrupting the principal.`;
 

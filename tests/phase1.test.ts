@@ -233,6 +233,25 @@ describe('fast conversational path', () => {
     assert.equal(memoryCalls, 0); // memory retrieval is skipped on the fast path
   });
 
+  it('short-circuits unambiguous small talk without a classifier round-trip', async () => {
+    // Only ONE response is configured: if the classifier still ran, the reply call
+    // would have no mock and throw. So consuming it as the reply proves the skip.
+    const client = new SequenceClient([
+      message('end_turn', [{ type: 'text', text: 'Hey! How can I help?' }]),
+    ]);
+    let memoryCalls = 0;
+    const memory: MemoryRetriever = {
+      async retrieve() { memoryCalls += 1; return ''; },
+    };
+    const agent = makeAgent({ client, memory, enableFastChat: true });
+
+    const result = await agent.run({ text: 'Hi ARES!', source: 'user' });
+
+    assert.equal(result.fastChat, true);
+    assert.match(result.finalText, /How can I help/);
+    assert.equal(memoryCalls, 0);
+  });
+
   it('routes real tasks through the full agent', async () => {
     const client = new SequenceClient([
       message('end_turn', [{ type: 'text', text: 'TASK' }]),

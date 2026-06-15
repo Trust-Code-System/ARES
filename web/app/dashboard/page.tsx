@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { DashboardHero } from '@/components/DashboardHero';
 import { HudPanel } from '@/components/HudPanel';
-import { SystemCore } from '@/components/SystemCore';
-import { Capability, EmptyState, MetricStack, taskStatusColor } from '@/lib/hud';
+import { MarketWidget } from '@/components/MarketWidget';
+import { MissionWidgets } from '@/components/MissionWidgets';
+import { OperationalStory } from '@/components/OperationalStory';
+import { Capability, EmptyState, taskStatusColor } from '@/lib/hud';
 import {
   api,
   type Confirmation,
@@ -95,38 +98,18 @@ export default function Dashboard() {
   const enabledTools = tools.filter((tool) => tool.enabled).length;
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8">
-      <div className="grid items-center gap-5 xl:grid-cols-[1fr_1.4fr_1fr]">
-        <div className="hidden xl:block">
-          <MetricStack
-            items={[
-              ['API link', connected ? 'online' : 'offline'],
-              ['Pending actions', confirmations.length.toString().padStart(2, '0')],
-              ['Scheduled jobs', jobs.length.toString().padStart(2, '0')],
-            ]}
-          />
-        </div>
-
-        <SystemCore
-          compact
-          state={!connected ? 'offline' : kill?.engaged ? 'halted' : error ? 'error' : 'idle'}
-          connected={connected}
-          killEngaged={Boolean(kill?.engaged)}
-          toolCount={enabledTools}
-          model={runtime ? `${runtime.provider} / ${runtime.model}` : 'detecting provider'}
-        />
-
-        <div className="hidden xl:block">
-          <MetricStack
-            align="right"
-            items={[
-              ['Memory facts', factCount.toString().padStart(2, '0')],
-              ['Active tools', enabledTools.toString().padStart(2, '0')],
-              ['Unread alerts', unread.toString().padStart(2, '0')],
-            ]}
-          />
-        </div>
-      </div>
+    <div className="mx-auto max-w-[1600px] space-y-10 px-3 py-4 sm:px-6 sm:py-5 lg:px-8">
+      <DashboardHero
+        connected={connected}
+        halted={Boolean(kill?.engaged)}
+        hasError={Boolean(error)}
+        toolCount={enabledTools}
+        model={runtime ? `${runtime.provider} / ${runtime.model}` : 'detecting provider'}
+        pendingCount={confirmations.length}
+        jobCount={jobs.length}
+        factCount={factCount}
+        unreadCount={unread}
+      />
 
       {error && (
         <div role="alert" className="border border-ares-red/50 bg-ares-red/10 px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-red-200 shadow-hud-red">
@@ -135,7 +118,39 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-12">
+      <section className="grid min-w-0 gap-5 xl:grid-cols-[1.35fr_0.65fr]" aria-label="Live intelligence widgets">
+        <MarketWidget />
+        <MissionWidgets
+          connected={connected}
+          toolCount={enabledTools}
+          totalTools={tools.length}
+          factCount={factCount}
+          taskCount={tasks.length}
+          unreadCount={unread}
+        />
+      </section>
+
+      <OperationalStory
+        factCount={factCount}
+        toolCount={enabledTools}
+        jobCount={jobs.length}
+        taskCount={tasks.length}
+      />
+
+      <section aria-labelledby="command-surfaces-title">
+        <div className="mb-5 flex items-end justify-between gap-4 scroll-reveal">
+          <div>
+            <div className="hud-label text-ares-cyan">Principal control layer</div>
+            <h2 id="command-surfaces-title" className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white sm:text-4xl">
+              Command surfaces
+            </h2>
+          </div>
+          <span className="hidden font-mono text-[9px] uppercase tracking-[0.16em] text-ares-muted sm:block">
+            Human authority remains in frame
+          </span>
+        </div>
+
+      <div className="dashboard-control-grid grid min-w-0 gap-5 xl:grid-cols-12">
         <HudPanel title="Autonomy control" code="CTL-01" accent={kill?.engaged ? 'red' : 'cyan'} className="xl:col-span-5">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -290,6 +305,7 @@ export default function Dashboard() {
           </div>
         </HudPanel>
       </div>
+      </section>
     </div>
   );
 }

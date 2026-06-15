@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import { SystemCore } from '@/components/SystemCore';
 import { VoiceButton } from '@/components/VoiceButton';
 import { VoiceWave } from '@/components/VoiceWave';
@@ -10,19 +10,47 @@ import { HudWeather } from '@/components/HudWeather';
 import { HudMetrics } from '@/components/HudMetrics';
 import { CircuitLines } from '@/components/CircuitLines';
 import { Markdown } from '@/components/Markdown';
+import { MicLevel } from '@/components/MicLevel';
+import { OpsLogCard } from '@/components/OpsLogCard';
+import { ScientificTelemetry } from '@/components/ScientificTelemetry';
+import { ThreadBar } from '@/components/ThreadBar';
+import { Toast, type ToastMessage } from '@/components/Toast';
+import { useMicAudio } from '@/components/useMicAudio';
 import { useWakeWord } from '@/components/useWakeWord';
 import {
   api,
   streamChat,
+  UnauthorizedError,
   type AssistantMode,
   type AuditEvent,
   type RuntimeStatus,
 } from '@/lib/api';
+import {
+  loadThreadMessages,
+  loadThreads,
+  migrateLegacyThread,
+  newThreadId,
+  readActiveThreadId,
+  removeThreadMessages,
+  saveThreadMessages,
+  saveThreads,
+  writeActiveThreadId,
+  type ThreadMeta,
+} from '@/lib/threads';
 import type { ReactorState } from '@/components/ArcReactor';
 
 interface Message {
   id: number;
-  role: 'user' | 'assistant';
+  // 'system' = local-only notice (slash-command output, help) — never sent to the model.
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+}
+
+/** A file dropped/attached into the composer: its name and server-extracted text. */
+interface Attachment {
+  id: string;
+  name: string;
+  kind: string;
   text: string;
 }
 
@@ -44,9 +72,25 @@ export default function ChatPage() {
   const [wakeFlash, setWakeFlash] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [threads, setThreads] = useState<ThreadMeta[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string>('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const assistantRef = useRef<number>(-1);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0); // nesting counter so child dragenter/leave don't flicker the overlay
+  const seenNotifsRef = useRef<Set<string>>(new Set()); // notification ids already surfaced
+  const notifBaselineRef = useRef(false); // first poll seeds "seen" so we don't replay history
+  // Render-time mirrors so the notification poller (a stable effect) reads fresh values.
+  const autoSpeakRef = useRef(autoSpeak);
+  const voiceEnabledRef = useRef(false);
+  autoSpeakRef.current = autoSpeak;
+  voiceEnabledRef.current = Boolean(runtime?.voiceEnabled);
   const messageIdRef = useRef(0);
-  const scrollAnchorRef = useRef<HTMLDivElement>(null);
+  const messageViewportRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   // Streaming speech: sentences are queued as tokens arrive and played in order so
@@ -66,6 +110,9 @@ export default function ChatPage() {
   const voiceResponseRef = useRef('');
   const chatAbortRef = useRef<AbortController | null>(null);
   const turnGenRef = useRef(0);
+  // Mirror of `speaking`/`streaming` for the wake-word barge-in gate, which reads it
+  // inside the recognizer's long-lived callbacks (state closures would be stale there).
+  const respondingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -100,27 +147,38 @@ export default function ChatPage() {
       chatAbortRef.current?.abort();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       audioUrlRef.current = null;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth' });
+    const viewport = messageViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({
+      top: viewport.scrollHeight,
+      behavior: streaming ? 'auto' : 'smooth',
+    });
   }, [messages, streaming]);
 
-  // Restore the conversation transcript from the previous session on first load.
+  // Restore threads + the active conversation on first load (migrating the old
+  // single-history blob into a first thread if this is the first run after upgrade).
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(CHAT_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Message[];
-        if (Array.isArray(parsed) && parsed.length) {
-          setMessages(parsed);
-          messageIdRef.current = parsed.reduce((max, m) => Math.max(max, m.id), 0) + 1;
-        }
-      }
-    } catch {
-      // Corrupt/blocked storage — start fresh.
+    let list = loadThreads();
+    let activeId: string;
+    if (!list.length) {
+      const { meta } = migrateLegacyThread<Message>(deriveThreadTitle);
+      list = [meta];
+      activeId = meta.id;
+    } else {
+      const stored = readActiveThreadId();
+      activeId = stored && list.some((t) => t.id === stored) ? stored : list[0]!.id;
     }
+    const msgs = loadThreadMessages<Message>(activeId);
+    setThreads(list);
+    setActiveThreadId(activeId);
+    setMessages(msgs);
+    messageIdRef.current = msgs.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+
     // Wake word defaults on; honour an explicit previous "off" choice.
     try {
       if (window.localStorage.getItem(WAKE_STORAGE_KEY) === 'off') setWakeEnabled(false);
@@ -140,41 +198,253 @@ export default function ChatPage() {
     }
   }, [wakeEnabled, hydrated]);
 
-  // Persist the transcript whenever it settles (skip mid-stream churn).
+  // Persist the active thread's transcript whenever it settles (skip mid-stream churn),
+  // and keep that thread's title/timestamp in the index up to date.
   useEffect(() => {
-    if (!hydrated || streaming) return;
-    try {
-      const trimmed = messages.slice(-MAX_SAVED_MESSAGES);
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
-    } catch {
-      // Storage full/blocked — non-fatal.
-    }
-  }, [messages, streaming, hydrated]);
+    if (!hydrated || streaming || !activeThreadId) return;
+    const trimmed = messages.slice(-MAX_SAVED_MESSAGES);
+    saveThreadMessages(activeThreadId, trimmed);
+    setThreads((list) => {
+      const index = list.findIndex((t) => t.id === activeThreadId);
+      if (index === -1) return list;
+      const current = list[index]!;
+      const next = [...list];
+      next[index] = {
+        ...current,
+        title: current.title || deriveThreadTitle(messages),
+        updatedAt: new Date().toISOString(),
+      };
+      saveThreads(next);
+      return next;
+    });
+  }, [messages, streaming, hydrated, activeThreadId]);
 
-  function clearHistory() {
+  /** Load a different thread into the chat (the persist effect already saved the current one). */
+  function switchThread(id: string) {
+    if (id === activeThreadId) return;
+    switchToLoaded(id, loadThreadMessages<Message>(id));
+  }
+
+  /** Start a fresh, empty thread and switch to it. */
+  function newThread() {
     interruptResponse();
+    const meta: ThreadMeta = { id: newThreadId(), title: '', updatedAt: new Date().toISOString() };
+    setThreads((list) => {
+      const next = [meta, ...list];
+      saveThreads(next);
+      return next;
+    });
     setMessages([]);
     setActivity([]);
     setLastError(null);
     messageIdRef.current = 0;
+    setActiveThreadId(meta.id);
+    writeActiveThreadId(meta.id);
+  }
+
+  function renameThread(id: string) {
+    const current = threads.find((t) => t.id === id);
+    const title = window.prompt('Rename thread', current?.title ?? '')?.trim();
+    if (title === undefined) return; // cancelled
+    setThreads((list) => {
+      const next = list.map((t) => (t.id === id ? { ...t, title } : t));
+      saveThreads(next);
+      return next;
+    });
+  }
+
+  function deleteThread(id: string) {
+    if (!window.confirm('Delete this conversation thread?')) return;
+    removeThreadMessages(id);
+    const remaining = threads.filter((t) => t.id !== id);
+    if (!remaining.length) {
+      const fresh: ThreadMeta = { id: newThreadId(), title: '', updatedAt: new Date().toISOString() };
+      saveThreads([fresh]);
+      setThreads([fresh]);
+      switchToLoaded(fresh.id, []);
+      return;
+    }
+    saveThreads(remaining);
+    setThreads(remaining);
+    if (id === activeThreadId) {
+      const nextId = remaining[0]!.id;
+      switchToLoaded(nextId, loadThreadMessages<Message>(nextId));
+    }
+  }
+
+  /** Shared tail of switch/delete: install a thread's messages as the active transcript. */
+  function switchToLoaded(id: string, msgs: Message[]) {
+    interruptResponse();
+    setMessages(msgs);
+    setActivity([]);
+    setLastError(null);
+    messageIdRef.current = msgs.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    setActiveThreadId(id);
+    writeActiveThreadId(id);
+  }
+
+  /** Show a brief floating confirmation that clears itself. */
+  function flashToast(text: string, tone: ToastMessage['tone'] = 'cyan') {
+    setToast({ text, tone });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2400);
+  }
+
+  /** Pin a message's text into long-term structured memory as an explicit fact. */
+  async function pinMemory(text: string) {
+    const content = text.trim();
+    if (!content) return;
     try {
-      window.localStorage.removeItem(CHAT_STORAGE_KEY);
-    } catch {
-      // ignore
+      await api.remember({ kind: 'fact', subject: deriveSubject(content), content });
+      flashToast('Pinned to memory', 'cyan');
+    } catch (error) {
+      flashToast(error instanceof UnauthorizedError ? 'Session expired' : 'Could not save memory', 'red');
+    }
+  }
+
+  /** Upload dropped/picked files, extract their text server-side, and stage them as attachments. */
+  async function handleFiles(files: FileList | File[]) {
+    const list = Array.from(files);
+    if (!list.length) return;
+    setUploading(true);
+    for (const file of list) {
+      try {
+        const result = await api.extract(file);
+        setAttachments((current) => [
+          ...current,
+          { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: result.name, kind: result.kind, text: result.text },
+        ]);
+      } catch (error) {
+        if (error instanceof UnauthorizedError) {
+          flashToast('Session expired', 'red');
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          flashToast(`Couldn't read ${file.name}`, 'red');
+          addSystemMessage(`⚠️ Upload failed for ${file.name}: ${message}`);
+        }
+      }
+    }
+    setUploading(false);
+  }
+
+  function onDrop(event: ReactDragEvent) {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragging(false);
+    if (event.dataTransfer?.files?.length) void handleFiles(event.dataTransfer.files);
+  }
+
+  function onDragEnter(event: ReactDragEvent) {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragging(true);
+  }
+
+  function onDragLeave(event: ReactDragEvent) {
+    if (!dragging) return;
+    event.preventDefault();
+    dragDepthRef.current -= 1;
+    if (dragDepthRef.current <= 0) {
+      dragDepthRef.current = 0;
+      setDragging(false);
+    }
+  }
+
+  /** Append a local-only system notice to the transcript (not sent to the model). */
+  function addSystemMessage(text: string) {
+    setMessages((current) => [...current, { id: messageIdRef.current++, role: 'system', text }]);
+  }
+
+  /** Surface a proactive notification: in the transcript, as a toast, and (when idle + voiced) aloud. */
+  function announceNotification(title: string, body: string) {
+    const detail = body?.trim() ? `${title}\n${body}` : title;
+    addSystemMessage(`🔔 ${detail}`);
+    flashToast(title, 'amber');
+    if (autoSpeakRef.current && voiceEnabledRef.current && !respondingRef.current) {
+      speakNow(`${title}. ${body ?? ''}`);
+    }
+  }
+
+  /** Ask ARES for an on-demand spoken briefing through the normal chat path. */
+  function requestBriefing() {
+    if (!connected || streaming) return;
+    void send(BRIEFING_REQUEST, { voice: true });
+  }
+
+  /**
+   * Handle a `/command` typed into the chat box locally instead of sending it to the
+   * model: /remember, /task, /search, /help. Unknown commands fall back to help.
+   */
+  async function handleSlash(raw: string) {
+    const match = /^\/(\w+)\s*([\s\S]*)$/.exec(raw.trim());
+    if (!match) return;
+    const cmd = match[1]!.toLowerCase();
+    const arg = match[2]!.trim();
+    setInput('');
+
+    switch (cmd) {
+      case 'remember':
+        if (!arg) return flashToast('Usage: /remember <fact>', 'amber');
+        return void pinMemory(arg);
+      case 'task':
+        if (!arg) return flashToast('Usage: /task <title>', 'amber');
+        try {
+          await api.createTask({ title: arg });
+          flashToast('Task created', 'cyan');
+        } catch (error) {
+          flashToast(error instanceof UnauthorizedError ? 'Session expired' : 'Could not create task', 'red');
+        }
+        return;
+      case 'search':
+        if (!arg) return flashToast('Usage: /search <query>', 'amber');
+        return void runSearch(arg);
+      case 'help':
+        return addSystemMessage(SLASH_HELP);
+      default:
+        flashToast(`Unknown command /${cmd}`, 'amber');
+        return addSystemMessage(SLASH_HELP);
+    }
+  }
+
+  /** Semantic-memory search, rendered into the transcript as a system notice. */
+  async function runSearch(query: string) {
+    flashToast('Searching memory...', 'cyan');
+    try {
+      const { hits, note } = await api.semanticMemory(query, 8);
+      if (note) return addSystemMessage(note);
+      if (!hits.length) return addSystemMessage(`No memory matches for “${query}”.`);
+      const lines = hits
+        .map((hit, i) => `${i + 1}. [${Math.round(hit.similarity * 100)}%] ${hit.content}`)
+        .join('\n');
+      addSystemMessage(`Memory matches for “${query}”:\n${lines}`);
+    } catch (error) {
+      addSystemMessage(`Search failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async function send(text: string, options?: { voice?: boolean }) {
     const trimmed = text.trim();
-    if (!trimmed || (streaming && !options?.voice)) return;
+    const atts = attachments;
+    if ((!trimmed && !atts.length) || (streaming && !options?.voice)) return;
 
     stopSpeaking();
+    // The model gets the typed text plus each attachment's extracted contents; the
+    // transcript bubble shows just the typed text and the file names (the full extract
+    // would bury the conversation and bloat saved history).
+    const composed = atts.length
+      ? `${trimmed}${trimmed ? '\n\n' : ''}${atts.map((a) => `[Attached file: ${a.name}]\n${a.text}`).join('\n\n')}`
+      : trimmed;
+    const display = atts.length
+      ? `${trimmed}${trimmed ? '\n\n' : ''}📎 ${atts.map((a) => a.name).join(', ')}`
+      : trimmed;
+
     // Snapshot prior turns (this render's messages, before we append the new ones)
     // so ARES answers with full conversation context.
     const history = messages
-      .filter((m) => m.text.trim())
+      .filter((m) => m.text.trim() && m.role !== 'system')
       .slice(-CONTEXT_TURNS)
-      .map((m) => ({ role: m.role, content: m.text }));
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }));
     const turnGen = ++turnGenRef.current;
     const controller = new AbortController();
     chatAbortRef.current = controller;
@@ -182,8 +452,9 @@ export default function ChatPage() {
     voiceResponseRef.current = '';
     setLastError(null);
     setActivity([]);
-    setMessages((current) => [...current, { id: messageIdRef.current++, role: 'user', text: trimmed }]);
+    setMessages((current) => [...current, { id: messageIdRef.current++, role: 'user', text: display }]);
     setInput('');
+    setAttachments([]);
     setStreaming(true);
     setMessages((current) => {
       assistantRef.current = current.length;
@@ -194,7 +465,7 @@ export default function ChatPage() {
       let gotToken = false;
       let failure: string | null = null;
       let completeText = '';
-      await streamChat(trimmed, {
+      await streamChat(composed, {
         onToken: (token) => {
           if (turnGen !== turnGenRef.current) return;
           gotToken = true;
@@ -416,12 +687,28 @@ export default function ChatPage() {
     };
   }, []);
 
+  // Keep a ref in sync with whether ARES is mid-reply, for the barge-in gate below.
+  useEffect(() => {
+    respondingRef.current = streaming || speaking;
+  }, [streaming, speaking]);
+
+  // Shared echo-cancelled mic tap powering both the input-level meter and barge-in
+  // voice-activity detection. Open whenever hands-free is on.
+  const mic = useMicAudio(wakeEnabled);
+
   // Always-on wake word: say "ARES" (alone or leading a command) — no button press.
   // Detection runs entirely in the browser, so it works even without server voice.
   const wake = useWakeWord({
     enabled: wakeEnabled && connected,
-    paused: streaming || speaking || voiceListening,
+    // Only push-to-talk (which owns the mic) fully suspends the recognizer. While ARES
+    // is replying we keep listening so "ARES" can barge in — the gate stops self-trigger.
+    paused: voiceListening,
+    // Barge-in: while ARES is replying, only honour "ARES" if the echo-cancelled VAD
+    // confirms a real human is talking, so ARES's own TTS can't trigger itself.
+    gate: () => !respondingRef.current || mic.userSpeakingRef.current,
     onWake: () => {
+      // If ARES is mid-reply, the wake word cuts it off immediately so it can listen.
+      if (respondingRef.current) interruptResponse();
       playWakeChime();
       setWakeFlash(true);
       if (wakeFlashTimerRef.current) clearTimeout(wakeFlashTimerRef.current);
@@ -432,6 +719,40 @@ export default function ChatPage() {
       void send(text, { voice: true });
     },
   });
+
+  // Proactive briefings & alerts: poll the notification feed and surface anything new.
+  // ARES's scheduled morning briefing (and inbox alerts) arrive here; when auto-voice is
+  // on and ARES is idle, they're spoken aloud — a hands-free proactive briefing.
+  useEffect(() => {
+    if (!connected) return;
+    let active = true;
+    async function poll() {
+      try {
+        const { notifications } = await api.notifications();
+        if (!active) return;
+        if (!notifBaselineRef.current) {
+          // First poll after (re)connect: treat existing notifications as already seen.
+          notifications.forEach((n) => seenNotifsRef.current.add(n.id));
+          notifBaselineRef.current = true;
+          return;
+        }
+        // Announce oldest-first so a burst reads in order.
+        const fresh = notifications.filter((n) => !seenNotifsRef.current.has(n.id)).reverse();
+        for (const note of fresh) {
+          seenNotifsRef.current.add(note.id);
+          announceNotification(note.title, note.body);
+        }
+      } catch {
+        // transient — try again next tick
+      }
+    }
+    void poll();
+    const id = window.setInterval(() => void poll(), 20000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, [connected]);
 
   const reactorState: ReactorState = !connected
     ? 'offline'
@@ -446,9 +767,23 @@ export default function ChatPage() {
 
   return (
     <div className="mx-auto grid h-[calc(100dvh-64px)] max-w-[1800px] grid-cols-1 md:h-[calc(100dvh-73px)] lg:grid-cols-[minmax(0,1fr)_330px]">
-      <section className="relative flex min-h-0 flex-col">
+      <section
+        className="relative flex min-h-0 flex-col"
+        onDrop={onDrop}
+        onDragEnter={onDragEnter}
+        onDragOver={(event) => { if (event.dataTransfer?.types?.includes('Files')) event.preventDefault(); }}
+        onDragLeave={onDragLeave}
+      >
         <CircuitLines className="z-0" />
         <HudCorners />
+        <Toast toast={toast} />
+        {dragging && (
+          <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center bg-ares-bg/85 backdrop-blur-sm">
+            <div className="border-2 border-dashed border-ares-cyan/60 px-10 py-8 font-mono text-sm uppercase tracking-[0.22em] text-ares-cyan shadow-hud-cyan">
+              Drop files to attach
+            </div>
+          </div>
+        )}
         {wakeFlash && (
           <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
             <div className="flex items-center gap-2 border border-ares-green/60 bg-ares-green/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.2em] text-ares-green shadow-[0_0_24px_rgba(53,242,161,0.35)] backdrop-blur">
@@ -457,79 +792,111 @@ export default function ChatPage() {
             </div>
           </div>
         )}
-        <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-3 sm:px-6 sm:pb-8 sm:pt-5 lg:px-8">
-          <div className="mx-auto max-w-4xl">
-            <SystemCore
-              state={reactorState}
-              connected={connected}
-              killEngaged={killEngaged}
-              toolCount={toolCount}
-              model={runtime ? `${runtime.provider} / ${runtime.model}` : 'detecting provider'}
-            />
-
-            <div className="mb-4 flex min-w-0 items-center gap-2 sm:mb-5 sm:gap-3">
-              <span className="hud-label truncate">Communication channel</span>
-              <span className="h-px flex-1 bg-gradient-to-r from-ares-cyan/40 to-transparent" />
-              <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-ares-muted">
-                {messages.length.toString().padStart(2, '0')} packets
-              </span>
-              {messages.length > 0 && (
-                <button
-                  type="button"
-                  onClick={clearHistory}
-                  title="Clear conversation history"
-                  className="shrink-0 border border-ares-line px-2 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ares-muted transition hover:border-ares-red/50 hover:text-ares-red"
-                >
-                  New session
-                </button>
-              )}
+        <div className="relative z-10 min-h-0 flex-1 overflow-hidden px-3 pt-3 sm:px-6 sm:pt-5 lg:px-8">
+          <div className="mx-auto flex h-full min-h-0 max-w-4xl flex-col">
+            <div className="relative shrink-0">
+              <SystemCore
+                state={reactorState}
+                connected={connected}
+                killEngaged={killEngaged}
+                toolCount={toolCount}
+                model={runtime ? `${runtime.provider} / ${runtime.model}` : 'detecting provider'}
+              />
+              <ScientificTelemetry
+                connected={connected}
+                active={streaming}
+                speaking={speaking}
+                latencyMs={latencyMs}
+                toolCount={toolCount}
+              />
             </div>
 
-            <div className="space-y-4 sm:space-y-5" aria-live="polite">
-              {messages.length === 0 && (
-                <div className="hud-panel mx-auto max-w-2xl p-5 text-center sm:p-7">
-                  <div className="mb-3 font-mono text-xs uppercase tracking-[0.28em] text-ares-cyan">Interface ready</div>
-                  <p className="text-sm leading-7 text-slate-300">
-                    Ask ARES to reason, retrieve memory, or execute a task. Tool telemetry will appear in the live operations log.
-                  </p>
-                </div>
-              )}
+            <div className="mb-2 flex min-w-0 shrink-0 items-center gap-2 sm:mb-3 sm:gap-3">
+              <span className="hud-label hidden truncate sm:inline">Channel</span>
+              <span className="hidden h-px flex-1 bg-gradient-to-r from-ares-cyan/40 to-transparent sm:block" />
+              <ThreadBar
+                threads={threads}
+                activeId={activeThreadId}
+                onSwitch={switchThread}
+                onNew={newThread}
+                onRename={renameThread}
+                onDelete={deleteThread}
+              />
+              <span className="ml-auto font-mono text-[9px] uppercase tracking-[0.18em] text-ares-muted">
+                {messages.length.toString().padStart(2, '0')} packets
+              </span>
+            </div>
 
-              {messages.map((message) => (
-                <article key={message.id} className={message.role === 'user' ? 'ml-auto max-w-[92%] sm:max-w-[76%]' : 'mr-auto max-w-[97%] sm:max-w-[82%]'}>
-                  <div className={`mb-1 flex items-center gap-2 ${message.role === 'user' ? 'justify-end' : ''}`}>
-                    <span className="hud-label">{message.role === 'user' ? 'Principal' : 'ARES'}</span>
-                    <span className={`h-px w-10 ${message.role === 'user' ? 'bg-ares-amber/60' : 'bg-ares-cyan/60'}`} />
-                    {message.role === 'assistant' && message.text && runtime?.voiceEnabled && (
-                      <button
-                        type="button"
-                        onClick={() => speaking ? stopSpeaking() : speakNow(message.text)}
-                        className="font-mono text-[9px] uppercase tracking-[0.14em] text-ares-muted transition hover:text-ares-cyan"
-                        aria-label={speaking ? 'Stop assistant speech' : 'Read assistant response aloud'}
-                      >
-                        {speaking ? 'Stop voice' : 'Speak'}
-                      </button>
-                    )}
+            <div
+              ref={messageViewportRef}
+              className="chat-fade-mask min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5 pr-1 sm:pb-7"
+              aria-live="polite"
+            >
+              <div className="flex min-h-full flex-col justify-end space-y-4 pt-14 sm:space-y-5 sm:pt-16">
+                {messages.length === 0 && (
+                  <div className="hud-panel mx-auto max-w-2xl p-5 text-center sm:p-7">
+                    <div className="mb-3 font-mono text-xs uppercase tracking-[0.28em] text-ares-cyan">Interface ready</div>
+                    <p className="text-sm leading-7 text-slate-300">
+                      Ask ARES to reason, retrieve memory, or execute a task. Tool telemetry will appear in the live operations log.
+                    </p>
+                    <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.16em] text-ares-muted">
+                      Type <span className="text-ares-cyan">/help</span> for commands
+                    </p>
                   </div>
-                  <div className={`relative break-words border px-3 py-2.5 text-sm leading-6 backdrop-blur-sm sm:px-4 sm:py-3 sm:leading-7 ${
-                    message.role === 'user'
-                      ? 'border-ares-amber/35 bg-ares-amber/[0.07] text-amber-50 shadow-hud-amber'
-                      : 'border-ares-cyan/30 bg-ares-panel/80 text-slate-100 shadow-hud-cyan'
-                  }`}>
-                    <span className={`absolute top-0 h-px w-12 ${message.role === 'user' ? 'right-0 bg-ares-amber' : 'left-0 bg-ares-cyan'}`} />
-                    {message.text ? (
-                      message.role === 'assistant'
-                        ? <Markdown content={message.text} />
-                        : <div className="whitespace-pre-wrap">{message.text}</div>
-                    ) : (
-                      <span className="thinking-shimmer font-mono text-xs uppercase tracking-[0.2em]">
-                        {voiceFirstRef.current ? 'Preparing voice response...' : 'Synthesizing response...'}
-                      </span>
-                    )}
+                )}
+
+                {messages.map((message) => message.role === 'system' ? (
+                  <div
+                    key={message.id}
+                    className="mx-auto w-full max-w-2xl whitespace-pre-wrap border border-dashed border-ares-cyan/30 bg-ares-panel/40 px-3 py-2 font-mono text-[11px] leading-5 text-ares-cyanSoft"
+                  >
+                    {message.text}
                   </div>
-                </article>
-              ))}
-              <div ref={scrollAnchorRef} />
+                ) : (
+                  <article key={message.id} className={message.role === 'user' ? 'ml-auto max-w-[92%] sm:max-w-[76%]' : 'mr-auto max-w-[97%] sm:max-w-[82%]'}>
+                    <div className={`mb-1 flex items-center gap-2 ${message.role === 'user' ? 'justify-end' : ''}`}>
+                      <span className="hud-label">{message.role === 'user' ? 'Principal' : 'ARES'}</span>
+                      <span className={`h-px w-10 ${message.role === 'user' ? 'bg-ares-amber/60' : 'bg-ares-cyan/60'}`} />
+                      {message.role === 'assistant' && message.text && runtime?.voiceEnabled && (
+                        <button
+                          type="button"
+                          onClick={() => speaking ? stopSpeaking() : speakNow(message.text)}
+                          className="font-mono text-[9px] uppercase tracking-[0.14em] text-ares-muted transition hover:text-ares-cyan"
+                          aria-label={speaking ? 'Stop assistant speech' : 'Read assistant response aloud'}
+                        >
+                          {speaking ? 'Stop voice' : 'Speak'}
+                        </button>
+                      )}
+                      {message.text && (
+                        <button
+                          type="button"
+                          onClick={() => void pinMemory(message.text)}
+                          className="font-mono text-[9px] uppercase tracking-[0.14em] text-ares-muted transition hover:text-ares-amber"
+                          title="Pin this to long-term memory"
+                        >
+                          Remember
+                        </button>
+                      )}
+                    </div>
+                    <div className={`relative break-words border px-3 py-2.5 text-sm leading-6 backdrop-blur-sm sm:px-4 sm:py-3 sm:leading-7 ${
+                      message.role === 'user'
+                        ? 'border-ares-amber/35 bg-ares-amber/[0.07] text-amber-50 shadow-hud-amber'
+                        : 'border-ares-cyan/30 bg-ares-panel/80 text-slate-100 shadow-hud-cyan'
+                    }`}>
+                      <span className={`absolute top-0 h-px w-12 ${message.role === 'user' ? 'right-0 bg-ares-amber' : 'left-0 bg-ares-cyan'}`} />
+                      {message.text ? (
+                        message.role === 'assistant'
+                          ? <Markdown content={message.text} />
+                          : <div className="whitespace-pre-wrap">{message.text}</div>
+                      ) : (
+                        <span className="thinking-shimmer font-mono text-xs uppercase tracking-[0.2em]">
+                          {voiceFirstRef.current ? 'Preparing voice response...' : 'Synthesizing response...'}
+                        </span>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -538,6 +905,10 @@ export default function ChatPage() {
           className="relative z-10 border-t border-ares-line/80 bg-ares-bg/95 px-3 py-3 backdrop-blur-xl sm:px-6 sm:py-4 lg:px-8"
           onSubmit={(event) => {
             event.preventDefault();
+            if (input.trim().startsWith('/')) {
+              void handleSlash(input);
+              return;
+            }
             void send(input);
           }}
         >
@@ -574,6 +945,15 @@ export default function ChatPage() {
                   Interrupt speech
                 </button>
               )}
+              <button
+                type="button"
+                onClick={requestBriefing}
+                disabled={!connected || streaming}
+                title="Spoken briefing: weather, calendar, and tasks"
+                className="h-9 shrink-0 border border-ares-line px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ares-muted transition hover:border-ares-cyan/50 hover:text-ares-cyan disabled:opacity-40"
+              >
+                Briefing
+              </button>
               {wake.supported && (
                 <button
                   type="button"
@@ -605,6 +985,9 @@ export default function ChatPage() {
               {wake.error && (
                 <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ares-red">{wake.error}</span>
               )}
+              {wakeEnabled && mic.supported && (
+                <MicLevel levelRef={mic.levelRef} active={mic.active} error={mic.error} />
+              )}
               {runtime?.voiceEnabled && (
                 <span className="ml-auto hidden shrink-0 items-center gap-2 sm:flex">
                   <span className="hud-label hidden sm:inline">{speaking ? 'Vox' : 'Vox idle'}</span>
@@ -612,6 +995,32 @@ export default function ChatPage() {
                 </span>
               )}
             </div>
+            {(attachments.length > 0 || uploading) && (
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                {attachments.map((attachment) => (
+                  <span
+                    key={attachment.id}
+                    className="flex items-center gap-1.5 border border-ares-cyan/40 bg-ares-cyan/5 px-2 py-1 font-mono text-[10px] text-ares-cyanSoft"
+                    title={`${attachment.kind} · ${attachment.text.length} chars extracted`}
+                  >
+                    📎 {attachment.name}
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((current) => current.filter((a) => a.id !== attachment.id))}
+                      className="text-ares-muted transition hover:text-ares-red"
+                      aria-label={`Remove ${attachment.name}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {uploading && (
+                  <span className="thinking-shimmer font-mono text-[10px] uppercase tracking-[0.14em] text-ares-muted">
+                    Reading file...
+                  </span>
+                )}
+              </div>
+            )}
             <div className="flex items-center gap-2 sm:gap-3">
               <span className="hidden font-mono text-lg text-ares-cyan sm:block">&gt;_</span>
               <label htmlFor="ares-command" className="sr-only">Message ARES</label>
@@ -624,13 +1033,34 @@ export default function ChatPage() {
                 disabled={streaming || !connected}
                 autoComplete="off"
               />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                aria-label="Attach a file"
+                className="hidden"
+                onChange={(event) => {
+                  if (event.target.files) void handleFiles(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!connected || uploading}
+                title="Attach a file (PDF, Word, spreadsheet, image, text)"
+                aria-label="Attach a file"
+                className="hud-button h-11 shrink-0 px-3 text-base disabled:opacity-40"
+              >
+                📎
+              </button>
               <VoiceButton
                 onTranscript={(transcript) => void send(transcript, { voice: true })}
                 onBeforeRecord={interruptResponse}
                 onListeningChange={setVoiceListening}
                 disabled={!connected || !runtime?.voiceEnabled}
               />
-              <button type="submit" className="hud-button h-11 shrink-0 px-3 sm:px-6" disabled={streaming || !connected || !input.trim()}>
+              <button type="submit" className="hud-button h-11 shrink-0 px-3 sm:px-6" disabled={streaming || !connected || (!input.trim() && !attachments.length)}>
                 <span className="sm:hidden">{streaming ? 'Wait' : 'Send'}</span>
                 <span className="hidden sm:inline">{streaming ? 'Running' : 'Transmit'}</span>
               </button>
@@ -656,13 +1086,7 @@ export default function ChatPage() {
 
         <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 font-mono text-[11px]">
           {toolEvents.map((event, index) => (
-            <li key={`${event.ts}-${index}`} className="animate-hud-flicker border-l border-ares-cyan/45 bg-black/25 px-3 py-2">
-              <div className="mb-1 flex justify-between gap-3">
-                <span className={event.type === 'refusal' ? 'text-ares-red' : 'text-ares-cyan'}>{event.type.toUpperCase()}</span>
-                <time className="text-ares-muted">{formatTime(event.ts)}</time>
-              </div>
-              <div className="break-words leading-5 text-slate-400">{JSON.stringify(event.detail)}</div>
-            </li>
+            <OpsLogCard key={`${event.ts}-${index}`} event={event} />
           ))}
           {toolEvents.length === 0 && (
             <li className="border border-dashed border-ares-line px-3 py-6 text-center uppercase tracking-[0.14em] text-ares-muted">
@@ -681,9 +1105,18 @@ export default function ChatPage() {
   );
 }
 
-const CHAT_STORAGE_KEY = 'ares.chat.history';
+const SLASH_HELP = [
+  'Commands:',
+  '  /remember <fact>   pin a fact to long-term memory',
+  '  /task <title>      create a task',
+  '  /search <query>    search semantic memory',
+  '  /help              show this list',
+].join('\n');
+
 const WAKE_STORAGE_KEY = 'ares.wake.enabled';
 const MAX_SAVED_MESSAGES = 100;
+const BRIEFING_REQUEST =
+  "Give me my briefing for today — today's weather, my calendar, and my open tasks. Keep it concise and natural to listen to.";
 // How many prior turns to send back to ARES for conversation context.
 const CONTEXT_TURNS = 16;
 
@@ -697,6 +1130,22 @@ const ASSISTANT_MODES: AssistantMode[] = [
   'hr',
   'communications',
 ];
+
+/** Derive a thread label from its first user message (or '' when there's nothing to name it by). */
+function deriveThreadTitle(messages: Message[]): string {
+  const firstUser = messages.find((m) => m.role === 'user' && m.text.trim());
+  if (!firstUser) return '';
+  const text = firstUser.text.trim().replace(/\s+/g, ' ');
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+}
+
+/** Condense a message into a short subject label for a pinned memory fact. */
+function deriveSubject(content: string): string {
+  const firstLine = content.split('\n')[0]?.trim() ?? '';
+  const words = firstLine.split(/\s+/).slice(0, 8).join(' ');
+  if (!words) return 'Note';
+  return words.length > 60 ? `${words.slice(0, 57)}...` : words;
+}
 
 function replaceAssistantMessage(messages: Message[], index: number, text: string): Message[] {
   const next = [...messages];
@@ -788,11 +1237,6 @@ function speakable(text: string): string {
     .replace(/[*_#>~]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '--:--:--' : date.toLocaleTimeString([], { hour12: false });
 }
 
 function TelemetryCell({ label, value, active = false }: { label: string; value: string; active?: boolean }) {

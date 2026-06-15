@@ -156,6 +156,12 @@ export type AssistantMode =
   | 'document'
   | 'hr'
   | 'communications';
+export interface ExtractedUpload {
+  name: string;
+  kind: string;
+  text: string;
+  truncated: boolean;
+}
 export interface RuntimeStatus {
   provider: 'anthropic' | 'openai' | 'gemini';
   model: string;
@@ -213,6 +219,19 @@ export const api = {
     if (res.status === 401) throw new UnauthorizedError();
     if (!res.ok) throw new Error(`speech synthesis failed (${res.status})`);
     return res.blob();
+  },
+  extract: async (file: File): Promise<ExtractedUpload> => {
+    const res = await fetch(`${API_BASE}/api/extract?name=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'application/octet-stream', ...authHeaders() },
+      body: file,
+    });
+    if (res.status === 401) throw new UnauthorizedError();
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(detail.error ?? `file extraction failed (${res.status})`);
+    }
+    return res.json() as Promise<ExtractedUpload>;
   },
   transcribe: async (audio: Blob, contentType: string): Promise<string> => {
     const res = await fetch(`${API_BASE}/api/voice/transcribe`, {

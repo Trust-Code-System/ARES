@@ -3,9 +3,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, UnauthorizedError } from '@/lib/api';
 
-const SILENCE_MS = 700;
+/** How long a pause must last before a turn is considered finished. Generous so
+ *  natural mid-thought pauses ("um…", breaths) don't cut you off early. */
+const SILENCE_MS = 1100;
 const MAX_RECORDING_MS = 30_000;
-const SPEECH_LEVEL = 0.025;
+// Energy gating for the MediaRecorder fallback: thresholds float above a learned
+// noise floor so a steady fan/AC hum reads as silence instead of fake "speech".
+const SPEECH_ON_RATIO = 3.0;
+const SPEECH_OFF_RATIO = 1.9;
+const SPEECH_ABS_MIN = 0.02;
+const FLOOR_ADAPT = 0.05;
 
 /**
  * Fast voice capture. Chromium uses its streaming speech recognizer so a turn is
@@ -32,6 +39,7 @@ export function VoiceButton({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const monitorCleanupRef = useRef<(() => void) | null>(null);
+  const recogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => () => cleanup(), []);
 
@@ -43,6 +51,10 @@ export function VoiceButton({
   function cleanup() {
     monitorCleanupRef.current?.();
     monitorCleanupRef.current = null;
+    if (recogTimerRef.current) {
+      clearInterval(recogTimerRef.current);
+      recogTimerRef.current = null;
+    }
 
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
@@ -86,20 +98,45 @@ export function VoiceButton({
   function startRecognition(recognition: SpeechRecognition) {
     recognitionRef.current = recognition;
     recognition.lang = navigator.language || 'en-US';
-    recognition.continuous = false;
+    // Continuous so the browser doesn't finalize (and end the turn) the instant you
+    // pause. We decide the turn is over ourselves, after SILENCE_MS of no new words,
+    // so brief mid-sentence pauses don't cut you off.
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setListening(true);
+    let lastResultAt = performance.now();
+    const startSilenceWatch = () => {
+      if (recogTimerRef.current) clearInterval(recogTimerRef.current);
+      const startedAt = performance.now();
+      recogTimerRef.current = setInterval(() => {
+        const now = performance.now();
+        const idleLongEnough = transcriptRef.current && now - lastResultAt >= SILENCE_MS;
+        if (idleLongEnough || now - startedAt >= MAX_RECORDING_MS) {
+          if (recogTimerRef.current) {
+            clearInterval(recogTimerRef.current);
+            recogTimerRef.current = null;
+          }
+          try {
+            recognition.stop();
+          } catch {
+            // Already stopping.
+          }
+        }
+      }, 150);
+    };
+
+    recognition.onstart = () => {
+      setListening(true);
+      startSilenceWatch();
+    };
     recognition.onresult = (event) => {
       let text = '';
-      let final = false;
       for (let i = 0; i < event.results.length; i += 1) {
         text += `${event.results[i]?.[0]?.transcript ?? ''} `;
-        final ||= Boolean(event.results[i]?.isFinal);
       }
       transcriptRef.current = text.trim();
-      if (final) recognition.stop();
+      lastResultAt = performance.now(); // reset the pause clock on every new word
     };
     recognition.onerror = (event) => {
       if (event.error !== 'aborted') {
@@ -108,6 +145,10 @@ export function VoiceButton({
     };
     recognition.onend = () => {
       recognitionRef.current = null;
+      if (recogTimerRef.current) {
+        clearInterval(recogTimerRef.current);
+        recogTimerRef.current = null;
+      }
       setListening(false);
       const text = transcriptRef.current.trim();
       transcriptRef.current = '';
@@ -165,6 +206,7 @@ export function VoiceButton({
 
     let heardSpeech = false;
     let lastSpeechAt = performance.now();
+    let noiseFloor = 0.012;
     const startedAt = lastSpeechAt;
     const timer = window.setInterval(() => {
       analyser.getByteTimeDomainData(samples);
@@ -175,9 +217,15 @@ export function VoiceButton({
       }
       const level = Math.sqrt(energy / samples.length);
       const now = performance.now();
-      if (level >= SPEECH_LEVEL) {
+      // Threshold floats above the measured ambient level so a steady fan/AC hum is
+      // treated as silence rather than keeping the recording open forever.
+      const speechThreshold = Math.max(noiseFloor * SPEECH_ON_RATIO, SPEECH_ABS_MIN);
+      const silenceThreshold = Math.max(noiseFloor * SPEECH_OFF_RATIO, SPEECH_ABS_MIN * 0.6);
+      if (level >= speechThreshold) {
         heardSpeech = true;
         lastSpeechAt = now;
+      } else if (level < silenceThreshold) {
+        noiseFloor += (level - noiseFloor) * FLOOR_ADAPT; // learn the room while quiet
       }
       if ((heardSpeech && now - lastSpeechAt >= SILENCE_MS) || now - startedAt >= MAX_RECORDING_MS) {
         if (recorder.state !== 'inactive') recorder.stop();

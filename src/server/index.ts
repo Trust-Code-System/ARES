@@ -132,6 +132,7 @@ async function main(): Promise<void> {
       toolPermissions,
       registry,
       ...(voice ? { voice } : {}),
+      ...(visionExtractor ? { vision: visionExtractor } : {}),
       runtime: {
         provider: llm.provider,
         model: llm.reasoningModel,

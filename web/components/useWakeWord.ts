@@ -44,6 +44,13 @@ export interface UseWakeWordOptions {
   lang?: string;
   /** How long (ms) to wait for a command after a bare "ARES" before re-idling. */
   armWindowMs?: number;
+  /**
+   * Optional veto checked the instant a wake word is heard: when it returns false the
+   * detection is dropped. Used for barge-in — while ARES is speaking, only honour "ARES"
+   * if an echo-cancelled detector confirms a real human is talking, so ARES's own TTS
+   * leaking into the (non-echo-cancelled) recognizer can't trigger itself.
+   */
+  gate?: () => boolean;
 }
 
 export interface UseWakeWord {
@@ -93,7 +100,7 @@ function findWake(text: string): { command: string } | null {
 }
 
 export function useWakeWord(options: UseWakeWordOptions): UseWakeWord {
-  const { enabled, onCommand, onWake, paused = false, lang = 'en-US', armWindowMs = 8000 } = options;
+  const { enabled, onCommand, onWake, paused = false, lang = 'en-US', armWindowMs = 8000, gate } = options;
 
   const [supported, setSupported] = useState(false);
   const [status, setStatus] = useState<WakeStatus>('idle');
@@ -103,12 +110,14 @@ export function useWakeWord(options: UseWakeWordOptions): UseWakeWord {
   const onCommandRef = useRef(onCommand);
   const onWakeRef = useRef(onWake);
   const pausedRef = useRef(paused);
+  const gateRef = useRef(gate);
   const armedRef = useRef(false);
   const armTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   onCommandRef.current = onCommand;
   onWakeRef.current = onWake;
   pausedRef.current = paused;
+  gateRef.current = gate;
 
   useEffect(() => {
     setSupported(typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
@@ -164,8 +173,10 @@ export function useWakeWord(options: UseWakeWordOptions): UseWakeWord {
     };
 
     recognition.onresult = (event) => {
-      // Ignore everything heard while suspended (e.g. ARES is speaking).
+      // Ignore everything heard while suspended (e.g. push-to-talk owns the mic).
       if (pausedRef.current) return;
+      // Barge-in veto: drop detections the gate rejects (e.g. ARES's own TTS while speaking).
+      if (gateRef.current && !gateRef.current()) return;
 
       const result = event.results[event.results.length - 1];
       if (!result) return;

@@ -12,9 +12,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Logger } from '../types.js';
 import { ApiHandler, type ApiDeps } from './api.js';
 import { extractCredential, type Authenticator } from './auth.js';
+import { extractUpload } from './extract.js';
 import { chatSchema, parseBody, speakSchema } from './schemas.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
+/** File uploads (PDFs, spreadsheets, images) are larger than chat/voice bodies. */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -106,6 +109,12 @@ export class ApiServer {
       return;
     }
 
+    // File uploads also carry raw binary (the file bytes); handled before JSON parsing.
+    if (req.method === 'POST' && url.pathname === '/api/extract') {
+      await this.extract(req, url, res);
+      return;
+    }
+
     const body = await readJson(req).catch(() => undefined);
 
     if (req.method === 'POST' && url.pathname === '/api/voice/speak') {
@@ -150,6 +159,24 @@ export class ApiServer {
     const text = await voice.transcribe(audio, req.headers['content-type'] ?? 'audio/webm');
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ text }));
+  }
+
+  /** Extract text from an uploaded file (?name=<filename>, raw bytes in the body). */
+  private async extract(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    const filename = url.searchParams.get('name') ?? 'upload';
+    const buffer = await readRaw(req, MAX_UPLOAD_BYTES);
+    try {
+      const result = await extractUpload({
+        filename,
+        buffer,
+        ...(this.opts.deps.vision ? { vision: this.opts.deps.vision } : {}),
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    }
   }
 
   private async speak(body: unknown, res: ServerResponse): Promise<void> {
@@ -247,12 +274,12 @@ function notConfigured(res: ServerResponse): void {
   res.end(JSON.stringify({ error: 'voice provider not configured' }));
 }
 
-async function readRaw(req: IncomingMessage): Promise<Buffer> {
+async function readRaw(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     total += (chunk as Buffer).length;
-    if (total > MAX_BODY_BYTES) throw new Error('body too large');
+    if (total > maxBytes) throw new Error('body too large');
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks);

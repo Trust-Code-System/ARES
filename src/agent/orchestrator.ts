@@ -390,11 +390,19 @@ export class Agent {
     if (input.source !== 'user') return null;
     if (input.mode && input.mode !== 'general') return null;
 
+    // Unambiguous small talk ("hi", "thanks", "good morning") skips the classifier
+    // round-trip entirely and answers immediately — the single biggest latency cut
+    // for trivial spoken turns. Whole-message match only, so it can never misroute a
+    // real request; anything else still pays for the TASK-biased classifier.
     let kind: 'chat' | 'task';
-    try {
-      kind = await this.classifyTurn(input, signal);
-    } catch {
-      return null; // classifier failed → use the full agent
+    if (isObviousSmallTalk(input.text)) {
+      kind = 'chat';
+    } else {
+      try {
+        kind = await this.classifyTurn(input, signal);
+      } catch {
+        return null; // classifier failed → use the full agent
+      }
     }
     if (kind !== 'chat') return null;
 
@@ -466,6 +474,36 @@ export class Agent {
       });
     }
   }
+}
+
+/**
+ * Curated phrases that are *always* casual chat — no tools, memory, or real-time
+ * data could be needed. Matched against the whole, punctuation-stripped message so
+ * "what's the weather" never qualifies; only a bare greeting/thanks/farewell does.
+ */
+const SMALL_TALK = new Set([
+  'hi', 'hii', 'hello', 'helo', 'hey', 'heya', 'hiya', 'yo', 'sup', 'hey there',
+  'hi there', 'hello there', 'hi ares', 'hey ares', 'hello ares', 'hiya ares',
+  'good morning', 'good afternoon', 'good evening', 'morning', 'evening',
+  'thanks', 'thank you', 'thank you so much', 'thanks so much', 'thanks a lot',
+  'thanks ares', 'thank you ares', 'thx', 'ty', 'tysm', 'cheers', 'appreciate it',
+  'much appreciated', 'bye', 'goodbye', 'see you', 'see ya', 'later', 'good night',
+  'goodnight', 'gn', 'ok', 'okay', 'k', 'kk', 'cool', 'nice', 'great', 'awesome',
+  'perfect', 'got it', 'sounds good', 'no worries', 'np', 'haha', 'lol', 'lmao',
+  'ok thanks', 'okay thanks', 'cool thanks', 'great thanks', 'how are you',
+  "how's it going", 'hows it going', "what's up", 'whats up', 'how do you do',
+  'how are you doing', 'nice to meet you',
+]);
+
+/** True when the entire message is unambiguous small talk (greeting/thanks/etc.). */
+function isObviousSmallTalk(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized || normalized.length > 40) return false;
+  return SMALL_TALK.has(normalized);
 }
 
 function extractText(content: Anthropic.ContentBlock[]): string {

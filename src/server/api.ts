@@ -21,6 +21,7 @@ import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolPermissionStore } from '../tools/permissions.js';
 import type { NotificationStore } from '../notifications/store.js';
 import { TASK_STATUSES, type TaskStatus, type TaskStore } from '../tasks/store.js';
+import type { VisionExtractor } from '../llm/vision.js';
 import type { VoiceProvider } from './voice.js';
 import {
   chatSchema,
@@ -59,6 +60,8 @@ export interface ApiDeps {
   scheduler?: Scheduler;
   /** Optional voice provider for the /api/voice/* endpoints (httpServer.ts). */
   voice?: VoiceProvider;
+  /** Optional vision extractor for OCR on uploaded images (/api/extract). */
+  vision?: VisionExtractor;
   /** Semantic store + embedder for the /api/memory/semantic browse endpoint. */
   semantic?: SemanticStore;
   embeddings?: EmbeddingClient;
