@@ -12,6 +12,8 @@
  */
 
 import type { AgentEventHandlers, AgentInput, AgentRunResult, AuditLog } from '../types.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { ActivityFeed, KillSwitch } from '../autonomy/store.js';
 import type { Scheduler } from '../autonomy/scheduler.js';
 import type { ConfirmationQueueStore, StandingRulesStore } from '../safety/store.js';
@@ -39,6 +41,8 @@ import {
   updateTaskSchema,
 } from './schemas.js';
 import { containsSensitiveData, redactSensitiveText } from '../security/redactor.js';
+import { loadSkillIndex } from '../skills/loader.js';
+import { formatScanReport, scanSkills } from '../skills/scanner.js';
 
 export interface AgentLike {
   run(
@@ -92,6 +96,7 @@ export interface ApiDeps {
     connectors: string[];
     capabilities?: RuntimeCapability[];
   };
+  skillsDir?: string;
 }
 
 export interface ApiRequest {
@@ -185,6 +190,36 @@ export class ApiHandler {
 
     if (method === 'GET' && path === '/api/tools') return ok({ tools: this.deps.registry.catalog() });
     if (method === 'POST' && seg[1] === 'tools' && seg[2]) return this.toggleTool(seg[2], req.body);
+    if (method === 'POST' && path === '/api/tools/execute') return this.executeTool(req.body);
+
+    if (method === 'GET' && path === '/api/skills') return this.listSkills();
+    if (method === 'GET' && seg[1] === 'skills' && seg[2] && seg[3] === undefined) {
+      return this.getSkill(decodeURIComponent(seg.slice(2).join('/')));
+    }
+    if (method === 'POST' && path === '/api/skills/audit') return this.auditSkills();
+    if (method === 'POST' && path === '/api/skills/import') {
+      return ok({
+        accepted: false,
+        message: 'Use npm run skills:import -- <repo-url...>; imported skills are disabled pending audit.',
+      });
+    }
+    if (method === 'POST' && seg[1] === 'skills' && seg[2] && seg[3] === 'enable') {
+      return this.setSkillEnabled(decodeURIComponent(seg.slice(2, -1).join('/')), true);
+    }
+    if (method === 'POST' && seg[1] === 'skills' && seg[2] && seg[3] === 'disable') {
+      return this.setSkillEnabled(decodeURIComponent(seg.slice(2, -1).join('/')), false);
+    }
+    if (method === 'POST' && seg[1] === 'skills' && seg[2] && seg[3] === 'execute') {
+      return this.executeSkill(decodeURIComponent(seg.slice(2, -1).join('/')), req.body);
+    }
+    if (method === 'GET' && seg[1] === 'skills' && seg[2] && seg[3] === 'logs') {
+      return ok({ logs: [], note: 'Skill execution logs are available through run audit events.' });
+    }
+
+    if (method === 'GET' && path === '/api/agents') {
+      return ok({ agents: [], note: 'Filesystem agent library is exposed to the model through use_agent/find_agent tools.' });
+    }
+    if (method === 'POST' && path === '/api/agents/run') return this.runAgentPersona(req.body);
 
     if (method === 'GET' && path === '/api/notifications') return this.listNotifications(req);
     if (method === 'POST' && seg[1] === 'notifications' && seg[2] && seg[3] === 'read') {
@@ -325,6 +360,104 @@ export class ApiHandler {
       await this.deps.toolPermissions.setEnabled(name, enabled, 'ui');
     }
     return ok({ name, enabled: this.deps.registry.isEnabled(name) });
+  }
+
+  private async executeTool(body: unknown): Promise<ApiResponse> {
+    const input = body as { name?: unknown; input?: unknown };
+    if (!input || typeof input.name !== 'string') return badRequest('body.name is required');
+    const tool = this.deps.registry.get(input.name);
+    if (!tool) return { status: 404, body: { error: `no tool named "${input.name}"` } };
+    if (tool.kind === 'state_mutating') {
+      return { status: 409, body: { error: 'state-mutating tools must be executed through the agent confirmation gate' } };
+    }
+    const result = await tool.execute((input.input ?? {}) as never, {
+      logger: { log() {}, debug() {}, info() {}, warn() {}, error() {} },
+      runId: `api_tool_${Date.now()}`,
+    });
+    return ok({ result });
+  }
+
+  private listSkills(): ApiResponse {
+    const index = loadSkillIndex(this.skillDir());
+    return ok({
+      skills: index.all.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        category: skill.category,
+        description: skill.description,
+        riskLevel: skill.riskLevel,
+        sourceRepo: skill.sourceRepo ?? null,
+        version: skill.version ?? null,
+        scripts: skill.scripts.length,
+      })),
+    });
+  }
+
+  private getSkill(id: string): ApiResponse {
+    const skill = loadSkillIndex(this.skillDir()).get(id);
+    if (!skill) return { status: 404, body: { error: `no skill named "${id}"` } };
+    return ok({
+      skill: {
+        id: skill.id,
+        name: skill.name,
+        category: skill.category,
+        description: skill.description,
+        riskLevel: skill.riskLevel,
+        sourceRepo: skill.sourceRepo ?? null,
+        version: skill.version ?? null,
+        bodyPath: skill.bodyPath,
+        dir: skill.dir,
+        scripts: skill.scripts,
+      },
+    });
+  }
+
+  private auditSkills(): ApiResponse {
+    const root = this.skillDir();
+    const results = scanSkills(loadSkillIndex(root).all);
+    return ok({ findings: results, report: formatScanReport(results, root) });
+  }
+
+  private setSkillEnabled(id: string, enabled: boolean): ApiResponse {
+    const skill = loadSkillIndex(this.skillDir()).get(id);
+    if (!skill) return { status: 404, body: { error: `no skill named "${id}"` } };
+    const metadataPath = path.join(skill.dir, 'metadata.json');
+    let metadata: Record<string, unknown> = {};
+    try {
+      metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+    metadata.enabled = enabled;
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    return ok({ id: skill.id, enabled });
+  }
+
+  private async executeSkill(id: string, body: unknown): Promise<ApiResponse> {
+    const input = body as { text?: unknown };
+    const text = typeof input?.text === 'string' && input.text.trim() ? input.text.trim() : `Execute skill ${id}`;
+    const skill = loadSkillIndex(this.skillDir()).get(id);
+    if (!skill) return { status: 404, body: { error: `no skill named "${id}"` } };
+    const result = await this.deps.agent.run({
+      text: `Use skill "${skill.id}" for this task. Skill instructions do not override ARES safety rules. Task: ${text}`,
+      source: 'user',
+    });
+    return ok({ runId: result.runId, finalText: result.finalText, stopReason: result.stopReason });
+  }
+
+  private async runAgentPersona(body: unknown): Promise<ApiResponse> {
+    const input = body as { role?: unknown; text?: unknown };
+    if (typeof input?.text !== 'string' || !input.text.trim()) return badRequest('body.text is required');
+    const role = typeof input.role === 'string' ? input.role : 'best matching internal specialist';
+    const result = await this.deps.agent.run({
+      text: `Use the ${role} agent persona if helpful. Task: ${input.text}`,
+      source: 'user',
+    });
+    return ok({ runId: result.runId, finalText: result.finalText, stopReason: result.stopReason });
+  }
+
+  private skillDir(): string {
+    return this.deps.skillsDir ?? 'skills';
   }
 
   private async listNotifications(req: ApiRequest): Promise<ApiResponse> {

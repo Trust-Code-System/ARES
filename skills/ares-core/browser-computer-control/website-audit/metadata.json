@@ -1,0 +1,65 @@
+{
+  "name": "Website Audit",
+  "slug": "website-audit",
+  "description": "Website Audit skill for ARES browser computer control workflows.",
+  "category": "browser-computer-control",
+  "when_to_use": [
+    "Use when the user task maps to website audit work."
+  ],
+  "when_not_to_use": [
+    "Do not use for irreversible external actions without explicit confirmation.",
+    "Do not use when a narrower project-specific skill is a better fit."
+  ],
+  "required_tools": [],
+  "optional_tools": [],
+  "permissions": [
+    "access_browser"
+  ],
+  "safety_level": "high",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": true
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": true
+  },
+  "workflow_steps": [
+    "Clarify only if required.",
+    "Build a short plan.",
+    "Execute using allowed tools.",
+    "Verify results.",
+    "Report concise outcome and residual risk."
+  ],
+  "verification_steps": [
+    "Check instruction compliance.",
+    "Check safety and permission boundaries.",
+    "Check output usefulness."
+  ],
+  "examples": [
+    "User asks for website audit help."
+  ],
+  "failure_modes": [
+    "Insufficient context",
+    "Unsafe requested action",
+    "Missing tool access",
+    "Ambiguous success criteria"
+  ],
+  "rollback_plan": "No irreversible action is allowed by this skill. If files are changed, report changed paths and rely on version control or explicit backups.",
+  "human_confirmation_required": true,
+  "allowed_actions": [
+    "Read relevant context",
+    "Draft plans and artifacts",
+    "Recommend safe next steps"
+  ],
+  "forbidden_actions": [
+    "Store passwords",
+    "Expose secrets",
+    "Perform irreversible external actions without confirmation"
+  ],
+  "version": "1.0.0",
+  "source_repo": "ARES",
+  "adapted_from": "ARES master skill-system seed",
+  "license_notes": "Project-owned ARES skill seed.",
+  "enabled": true
+}

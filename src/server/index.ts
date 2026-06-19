@@ -176,6 +176,7 @@ async function main(): Promise<void> {
       feedback,
       toolPermissions,
       registry,
+      ...(config.skillsDir ? { skillsDir: config.skillsDir } : {}),
       ...(voice ? { voice } : {}),
       ...(visionExtractor ? { vision: visionExtractor } : {}),
       runtime: {

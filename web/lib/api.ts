@@ -121,6 +121,20 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 export interface AuditEvent { runId: string; ts: string; type: string; detail: Record<string, unknown>; }
 export interface ActivityRecord { id: string; trigger: string; status: string; detail: string; runId: string | null; startedAt: string; finishedAt: string | null; }
 export interface ToolInfo { name: string; kind: string; description: string; enabled: boolean; }
+export interface SkillInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  sourceRepo: string | null;
+  version: string | null;
+  scripts: number;
+}
+export interface SkillAudit {
+  findings: unknown[];
+  report: string;
+}
 export interface KillSwitchState { engaged: boolean; reason: string | null; changedAt: string; changedBy: string | null; }
 export interface Confirmation { id: string; tool: string; input: unknown; reason: string; createdAt: string; }
 export interface Fact { id: string; kind: string; subject: string; content: string; importance: number; }
@@ -221,6 +235,10 @@ export const api = {
   tools: () => json<{ tools: ToolInfo[] }>('/api/tools'),
   toggleTool: (name: string, enabled: boolean) =>
     json(`/api/tools/${name}`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  skills: () => json<{ skills: SkillInfo[] }>('/api/skills'),
+  auditSkills: () => json<SkillAudit>('/api/skills/audit', { method: 'POST' }),
+  enableSkill: (id: string) => json(`/api/skills/${encodeURIComponent(id)}/enable`, { method: 'POST' }),
+  disableSkill: (id: string) => json(`/api/skills/${encodeURIComponent(id)}/disable`, { method: 'POST' }),
   jobs: () => json<{ jobs: Job[] }>('/api/jobs'),
   notifications: () => json<{ notifications: Notification[]; unread: number }>('/api/notifications'),
   markNotificationRead: (id: string) =>
