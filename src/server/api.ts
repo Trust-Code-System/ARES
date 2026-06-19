@@ -21,6 +21,7 @@ import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolPermissionStore } from '../tools/permissions.js';
 import type { NotificationStore } from '../notifications/store.js';
 import { TASK_STATUSES, type TaskStatus, type TaskStore } from '../tasks/store.js';
+import { type FeedbackRating, type FeedbackStore, type PreferenceSource } from '../feedback/store.js';
 import type { VisionExtractor } from '../llm/vision.js';
 import type { VoiceProvider } from './voice.js';
 import { CAPABILITY_BLUEPRINT, type CapabilityId, type RuntimeCapability } from '../agent/capabilities.js';
@@ -31,6 +32,8 @@ import {
   createTaskSchema,
   killSwitchSchema,
   parseBody,
+  recordFeedbackSchema,
+  recordPreferenceSchema,
   rememberSchema,
   toggleToolSchema,
   updateTaskSchema,
@@ -60,6 +63,8 @@ export interface ApiDeps {
   notifications?: NotificationStore;
   /** Task store. Optional (absent in minimal/test setups). */
   tasks?: TaskStore;
+  /** Feedback store (ratings/corrections + preference pairs). Optional. */
+  feedback?: FeedbackStore;
   scheduler?: Scheduler;
   /** Optional voice provider for the /api/voice/* endpoints (httpServer.ts). */
   voice?: VoiceProvider;
@@ -190,6 +195,11 @@ export class ApiHandler {
     if (method === 'POST' && path === '/api/tasks') return this.createTask(req.body);
     if (method === 'POST' && seg[1] === 'tasks' && seg[2]) return this.updateTask(seg[2], req.body);
     if (method === 'DELETE' && seg[1] === 'tasks' && seg[2]) return this.removeTask(seg[2]);
+
+    if (method === 'GET' && path === '/api/feedback') return this.listFeedback(req);
+    if (method === 'POST' && path === '/api/feedback') return this.recordFeedback(req.body);
+    if (method === 'GET' && path === '/api/preferences') return this.listPreferences(req);
+    if (method === 'POST' && path === '/api/preferences') return this.recordPreference(req.body);
 
     if (method === 'GET' && path === '/api/jobs') {
       const jobs = (this.deps.scheduler?.jobs() ?? []).map((j) => ({ name: j.name, cron: j.cron }));
@@ -380,6 +390,73 @@ export class ApiHandler {
     if (!this.deps.tasks) return { status: 404, body: { error: 'tasks are not configured' } };
     const removed = await this.deps.tasks.remove(id);
     return removed ? ok({ removed: true }) : { status: 404, body: { error: 'no task with that id' } };
+  }
+
+  private async listFeedback(req: ApiRequest): Promise<ApiResponse> {
+    if (!this.deps.feedback) return ok({ feedback: [] });
+    const ratingRaw = req.query.get('rating');
+    const filter: { rating?: FeedbackRating; limit: number } = { limit: limit(req, 100) };
+    if (ratingRaw !== null) {
+      const n = Number(ratingRaw);
+      if (n !== -1 && n !== 0 && n !== 1) return badRequest('rating must be -1, 0, or 1');
+      filter.rating = n as FeedbackRating;
+    }
+    const feedback = await this.deps.feedback.list(filter);
+    return ok({ feedback });
+  }
+
+  private async recordFeedback(body: unknown): Promise<ApiResponse> {
+    if (!this.deps.feedback) return { status: 404, body: { error: 'feedback is not configured' } };
+    const parsed = parseBody(recordFeedbackSchema, body);
+    if (!parsed.ok) return badRequest(parsed.error);
+    const input = parsed.data;
+    const fb = await this.deps.feedback.record({
+      rating: input.rating,
+      ...(input.target ? { target: input.target } : {}),
+      ...(input.note !== undefined ? { note: input.note } : {}),
+      ...(input.correction !== undefined ? { correction: input.correction } : {}),
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(input.response !== undefined ? { response: input.response } : {}),
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
+    });
+    // A correction with both sides present yields a ready-made preference pair.
+    let pair;
+    if (input.correction && input.prompt && input.response) {
+      pair = await this.deps.feedback.addPreference({
+        prompt: input.prompt,
+        chosen: input.correction,
+        rejected: input.response,
+        reason: input.note ?? 'User correction',
+        source: 'correction',
+      });
+    }
+    return ok({ feedback: fb, ...(pair ? { preference: pair } : {}) });
+  }
+
+  private async listPreferences(req: ApiRequest): Promise<ApiResponse> {
+    if (!this.deps.feedback) return ok({ preferences: [] });
+    const source = req.query.get('source');
+    const preferences = await this.deps.feedback.listPreferences({
+      ...(source ? { source: source as PreferenceSource } : {}),
+      limit: limit(req, 200),
+    });
+    return ok({ preferences });
+  }
+
+  private async recordPreference(body: unknown): Promise<ApiResponse> {
+    if (!this.deps.feedback) return { status: 404, body: { error: 'feedback is not configured' } };
+    const parsed = parseBody(recordPreferenceSchema, body);
+    if (!parsed.ok) return badRequest(parsed.error);
+    const input = parsed.data;
+    const preference = await this.deps.feedback.addPreference({
+      prompt: input.prompt,
+      chosen: input.chosen,
+      rejected: input.rejected,
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      source: input.source ?? 'ab_choice',
+      ...(input.safetyLabel ? { safetyLabel: input.safetyLabel } : {}),
+    });
+    return ok({ preference });
   }
 }
 

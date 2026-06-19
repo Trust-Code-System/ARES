@@ -60,3 +60,30 @@ export interface DatasetSplit {
   validation: TrainingExample[];
   test: TrainingExample[];
 }
+
+/**
+ * One pairwise preference record — the unit DPO/reward-model training consumes
+ * (see docs/github-extraction-report.md, repos #2/#5). `chosen` is preferred
+ * over `rejected` for the same `prompt`. These come from the feedback engine
+ * (src/feedback): explicit A/B choices, corrections, or audit-log seeding.
+ */
+export interface PreferenceExample {
+  /** Stable id; derived from a content hash when absent. */
+  id?: string;
+  prompt: string;
+  chosen: string;
+  rejected: string;
+  /** Why chosen beats rejected (kept out of the training tensors; useful for review). */
+  reason?: string;
+  /** Optional shared system prompt, mirroring TrainingExample.system. */
+  system?: string;
+  /** safe-RLHF style label when the pair is a harmlessness case. */
+  safetyLabel?: 'safe' | 'unsafe_rejected' | 'privacy';
+}
+
+export interface PreferenceDataset {
+  name: string;
+  version: string;
+  examples: PreferenceExample[];
+  meta?: DatasetMeta;
+}

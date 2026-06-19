@@ -24,6 +24,15 @@ export interface PythonConfig {
   maxOutputBytes: number;
 }
 
+/** Headless-browser / form-filling tool config. Off by default (heavy + risky). */
+export interface BrowserConfig {
+  enabled: boolean;
+  /** Run the browser headless (no visible window). Default true. */
+  headless: boolean;
+  /** Per-navigation/action timeout in ms. */
+  timeoutMs: number;
+}
+
 /** A stdio MCP server to connect to at startup and import tools from. */
 export interface McpServerConfig {
   name: string;
@@ -94,6 +103,8 @@ export interface Config {
   /** Sandboxed shell tool (off unless ARES_SHELL_ENABLED=true). */
   shell: ShellConfig;
   python: PythonConfig;
+  /** Headless browser + form-filling tools (off unless ARES_BROWSER_ENABLED=true). */
+  browser: BrowserConfig;
   systemActionsEnabled: boolean;
   /** Remotion video scaffolder (off unless ARES_REMOTION_ENABLED=true). */
   remotionEnabled: boolean;
@@ -220,6 +231,7 @@ export function loadConfig(): Config {
     spend: parseSpendConfig(),
     shell: parseShellConfig(),
     python: parsePythonConfig(),
+    browser: parseBrowserConfig(),
     systemActionsEnabled: process.env.ARES_SYSTEM_ACTIONS_ENABLED === 'true',
     remotionEnabled: process.env.ARES_REMOTION_ENABLED === 'true',
     trading: parseTradingConfig(),
@@ -266,6 +278,20 @@ export function parsePythonConfig(): PythonConfig {
     command: process.env.ARES_PYTHON_COMMAND || (process.platform === 'win32' ? 'python' : 'python3'),
     timeoutMs,
     maxOutputBytes: 64 * 1024,
+  };
+}
+
+/** Parse the headless-browser tool config from env. Disabled unless explicitly on. */
+export function parseBrowserConfig(): BrowserConfig {
+  const timeoutMs = Number(process.env.ARES_BROWSER_TIMEOUT_MS ?? '30000');
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000) {
+    throw new Error(`ARES_BROWSER_TIMEOUT_MS must be an integer >= 1000, got "${process.env.ARES_BROWSER_TIMEOUT_MS}".`);
+  }
+  return {
+    enabled: process.env.ARES_BROWSER_ENABLED === 'true',
+    // Default headless; set ARES_BROWSER_HEADLESS=false to watch ARES work.
+    headless: !['false', '0', 'off', 'no'].includes((process.env.ARES_BROWSER_HEADLESS ?? '').toLowerCase()),
+    timeoutMs,
   };
 }
 

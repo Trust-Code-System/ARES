@@ -7,6 +7,7 @@ import { calculate } from './builtin/calculate.js';
 import { createNotifyTool } from './builtin/notify.js';
 import { createFileTools } from './builtin/files.js';
 import { createTaskTools } from './builtin/tasks.js';
+import { createFeedbackTools } from './builtin/feedback.js';
 import { webFetch } from './builtin/webFetch.js';
 import { createWebSearchTool, type SearchProvider } from './builtin/webSearch.js';
 import { createDeepResearchTool } from './builtin/deepResearch.js';
@@ -20,6 +21,7 @@ import { createGithubTools, type GithubClient } from './builtin/github.js';
 import { createMemoryTools } from './builtin/memory.js';
 import type { StructuredStore } from '../memory/stores.js';
 import { createPythonTool, type PythonToolOptions } from './builtin/python.js';
+import { createBrowserTools, type BrowserController } from './builtin/browser.js';
 import { createSystemActionTools } from './builtin/systemActions.js';
 import { createDocumentTools } from './builtin/documents.js';
 import { createRemotionTool } from './builtin/remotion.js';
@@ -31,6 +33,7 @@ import type { SkillUsageStore } from '../skills/usage.js';
 import type { VisionExtractor } from '../llm/vision.js';
 import type { NotificationStore } from '../notifications/store.js';
 import type { TaskStore } from '../tasks/store.js';
+import type { FeedbackStore } from '../feedback/store.js';
 
 export interface RegistryOptions {
   /** Workspace root the file tools are jailed to. */
@@ -48,6 +51,14 @@ export interface RegistryOptions {
   shell?: { enabled: boolean } & Omit<ShellToolOptions, 'workspaceDir'>;
   /** Dedicated Python tool config. Registered only when `enabled` is true. */
   python?: { enabled: boolean } & Omit<PythonToolOptions, 'workspaceDir'>;
+  /**
+   * Headless-browser controller. When present, the browser_* form-filling tools
+   * are registered. The composition root owns its lifecycle (closes it on
+   * shutdown); the registry just wires the tools over it.
+   */
+  browserController?: BrowserController;
+  /** Per-action timeout for the browser tools (ms). */
+  browserTimeoutMs?: number;
   /** Cross-platform approved application and URL launch tools. */
   systemActionsEnabled?: boolean;
   /** Remotion video scaffolder. Registered only when enabled (default off). */
@@ -67,6 +78,8 @@ export interface RegistryOptions {
   notificationStore?: NotificationStore;
   /** Task store. When present, the create_task/list_tasks/update_task tools are registered. */
   taskStore?: TaskStore;
+  /** Feedback store. When present, the record_feedback/record_preference tools are registered. */
+  feedbackStore?: FeedbackStore;
   /**
    * Expert skill library. When present, find_skill/use_skill and the gated
    * install_skill_repo tool are registered over the vendored skills directory.
@@ -136,6 +149,12 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
     }));
   }
 
+  if (opts.browserController) {
+    for (const tool of createBrowserTools(opts.browserController, opts.browserTimeoutMs)) {
+      registry.register(tool);
+    }
+  }
+
   if (opts.systemActionsEnabled) {
     for (const tool of createSystemActionTools()) registry.register(tool);
   }
@@ -158,6 +177,10 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
 
   if (opts.taskStore) {
     for (const tool of createTaskTools(opts.taskStore)) registry.register(tool);
+  }
+
+  if (opts.feedbackStore) {
+    for (const tool of createFeedbackTools(opts.feedbackStore)) registry.register(tool);
   }
 
   if (opts.mcpConfigPath) {

@@ -36,6 +36,7 @@ import { formatZodError } from '../tools/define.js';
 import { containsSensitiveData, redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 import { modeInstruction } from './modes.js';
 import { parseEffort, effortProfile } from './effort.js';
+import type { PreferenceSeeder } from '../feedback/actionRanking.js';
 
 export interface MessageClient {
   createMessage(params: CreateMessageParams): Promise<Anthropic.Message>;
@@ -92,6 +93,12 @@ export interface AgentOptions {
    * tier still applies, but provider switching is a no-op.
    */
   router?: ModelRouter;
+  /**
+   * Optional. Called after a run finishes with the run's audit events, so the
+   * gate's real decisions can be distilled into preference pairs (see
+   * src/feedback/actionRanking.ts). Guarded — it can never fail the turn.
+   */
+  preferenceSeeder?: PreferenceSeeder;
 }
 
 export class Agent {
@@ -104,7 +111,25 @@ export class Agent {
   ): Promise<AgentRunResult> {
     const result = await this.execute(input, signal, events);
     await this.maybeIngest(input, result);
+    await this.maybeSeedPreferences(input, result);
     return result;
+  }
+
+  /**
+   * Distil the run's gate decisions into preference data, if a seeder is wired.
+   * Guarded — preference seeding is a learning nicety and must never fail a turn.
+   */
+  private async maybeSeedPreferences(input: AgentInput, result: AgentRunResult): Promise<void> {
+    const seeder = this.opts.preferenceSeeder;
+    if (!seeder) return;
+    try {
+      await seeder({ events: this.opts.audit.forRun(result.runId), input, result });
+    } catch (err) {
+      this.opts.logger.error('preference seeder threw', {
+        runId: result.runId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

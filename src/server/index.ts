@@ -31,6 +31,9 @@ import { buildVoiceProvider } from './voice.js';
 import { ApiKeyAuthenticator } from './auth.js';
 import { buildNotificationStore } from '../notifications/store.js';
 import { buildTaskStore } from '../tasks/store.js';
+import { buildFeedbackStore } from '../feedback/store.js';
+import { buildPreferenceSeeder } from '../feedback/actionRanking.js';
+import { createPlaywrightController } from '../tools/builtin/playwrightController.js';
 import { buildToolPermissionStore } from '../tools/permissions.js';
 import { ARES_CAPABILITY_PROMPT } from '../agent/capabilities.js';
 
@@ -88,6 +91,7 @@ async function main(): Promise<void> {
   const autonomy = buildAutonomyBackend(memory.db);
   const notifications = buildNotificationStore(memory.db);
   const tasks = buildTaskStore(memory.db);
+  const feedback = buildFeedbackStore(memory.db);
   const toolPermissions = buildToolPermissionStore(memory.db);
   const mcp = await buildMcpTools(config, logger);
 
@@ -101,6 +105,10 @@ async function main(): Promise<void> {
 
   const synthesizer = buildSynthesizer(client);
   const imageGenerator = buildImageGenerator();
+
+  const browser = config.browser.enabled
+    ? createPlaywrightController({ headless: config.browser.headless, timeoutMs: config.browser.timeoutMs })
+    : undefined;
 
   const registry = createDefaultRegistry({
     workspaceDir: config.workspaceDir,
@@ -117,6 +125,8 @@ async function main(): Promise<void> {
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
     taskStore: tasks,
+    feedbackStore: feedback,
+    ...(browser ? { browserController: browser, browserTimeoutMs: config.browser.timeoutMs } : {}),
     mcpConfigPath: config.mcpConfigPath,
     ...(config.skillsDir ? { skills: { dir: config.skillsDir } } : {}),
     ...(config.agentsDir ? { agents: { dir: config.agentsDir } } : {}),
@@ -141,6 +151,7 @@ async function main(): Promise<void> {
     systemPrompt: buildSystemPrompt(config),
     maxIterations: config.maxIterations,
     enableFastChat: config.enableFastChat,
+    preferenceSeeder: buildPreferenceSeeder(feedback),
   });
 
   const voice = buildVoiceProvider();
@@ -158,6 +169,7 @@ async function main(): Promise<void> {
       embeddings: memory.embeddings,
       notifications,
       tasks,
+      feedback,
       toolPermissions,
       registry,
       ...(voice ? { voice } : {}),
@@ -204,6 +216,7 @@ async function main(): Promise<void> {
 
   await server.stop();
   await memory.flushMemory();
+  await browser?.close();
   await mcp.close();
   await memory.db?.close();
 }

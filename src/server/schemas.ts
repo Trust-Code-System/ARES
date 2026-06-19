@@ -13,6 +13,7 @@ import { ASSISTANT_MODES } from '../agent/modes.js';
 import { EFFORT_LEVELS } from '../agent/effort.js';
 import { STRUCTURED_KINDS } from '../memory/types.js';
 import { TASK_PRIORITIES, TASK_STATUSES } from '../tasks/store.js';
+import { FEEDBACK_TARGETS, PREFERENCE_SOURCES, SAFETY_LABELS } from '../feedback/store.js';
 
 export const chatSchema = z.object({
   text: z.string().trim().min(1, 'body.text is required'),
@@ -63,6 +64,25 @@ export const updateTaskSchema = z.object({
   detail: z.string().optional(),
   project: z.string().optional(),
   dueAt: z.string().optional(),
+});
+
+export const recordFeedbackSchema = z.object({
+  rating: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
+  target: z.enum(FEEDBACK_TARGETS).optional(),
+  note: z.string().optional(),
+  correction: z.string().optional(),
+  prompt: z.string().optional(),
+  response: z.string().optional(),
+  runId: z.string().optional(),
+});
+
+export const recordPreferenceSchema = z.object({
+  prompt: z.string().trim().min(1, 'body.prompt is required'),
+  chosen: z.string().trim().min(1, 'body.chosen is required'),
+  rejected: z.string().trim().min(1, 'body.rejected is required'),
+  reason: z.string().optional(),
+  source: z.enum(PREFERENCE_SOURCES).optional(),
+  safetyLabel: z.enum(SAFETY_LABELS).optional(),
 });
 
 export const loginSchema = z.object({

@@ -33,6 +33,9 @@ import { buildMcpTools } from './mcp/factory.js';
 import { MCP_MANAGEMENT_PROMPT_NOTE } from './mcp/tools.js';
 import { buildNotificationStore } from './notifications/store.js';
 import { buildTaskStore } from './tasks/store.js';
+import { buildFeedbackStore } from './feedback/store.js';
+import { buildPreferenceSeeder } from './feedback/actionRanking.js';
+import { createPlaywrightController } from './tools/builtin/playwrightController.js';
 import { buildToolPermissionStore } from './tools/permissions.js';
 import { Agent } from './agent/orchestrator.js';
 import { ARES_CAPABILITY_PROMPT } from './agent/capabilities.js';
@@ -81,6 +84,7 @@ async function main(): Promise<void> {
   // Phase 5 hardening: durable notification history, tasks, and tool permissions.
   const notifications = buildNotificationStore(memory.db);
   const tasks = buildTaskStore(memory.db);
+  const feedback = buildFeedbackStore(memory.db);
   const toolPermissions = buildToolPermissionStore(memory.db);
 
   const searchProvider = buildSearchProvider(config);
@@ -120,6 +124,11 @@ async function main(): Promise<void> {
   const imageGenerator = buildImageGenerator();
   if (!imageGenerator) logger.warn('No image provider key — generate_image is disabled.');
 
+  // Headless browser / form-filling tools — off unless ARES_BROWSER_ENABLED=true.
+  const browser = config.browser.enabled
+    ? createPlaywrightController({ headless: config.browser.headless, timeoutMs: config.browser.timeoutMs })
+    : undefined;
+
   const registry = createDefaultRegistry({
     workspaceDir: config.workspaceDir,
     ...(searchProvider ? { searchProvider } : {}),
@@ -135,6 +144,8 @@ async function main(): Promise<void> {
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
     taskStore: tasks,
+    feedbackStore: feedback,
+    ...(browser ? { browserController: browser, browserTimeoutMs: config.browser.timeoutMs } : {}),
     mcpConfigPath: config.mcpConfigPath,
     ...(config.skillsDir ? { skills: { dir: config.skillsDir, usageStore: skillUsage } } : {}),
     ...(config.agentsDir
@@ -156,6 +167,7 @@ async function main(): Promise<void> {
     systemPrompt: buildSystemPrompt(config),
     maxIterations: config.maxIterations,
     enableFastChat: config.enableFastChat,
+    preferenceSeeder: buildPreferenceSeeder(feedback),
   });
 
   logger.info('ARES online', {
@@ -171,6 +183,7 @@ async function main(): Promise<void> {
   if (oneShot) {
     await runOnce(agent, oneShot);
     await memory.flushMemory(); // let background ingestion + audit writes finish before exit
+    await browser?.close();
     await mcp.close();
     await memory.db?.close();
     return;
@@ -178,6 +191,7 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => {
     void memory
       .flushMemory()
+      .finally(() => browser?.close())
       .finally(() => mcp.close())
       .finally(() => memory.db?.close())
       .finally(() => process.exit(0));

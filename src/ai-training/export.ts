@@ -8,7 +8,7 @@
  * JSONL/CSV forms for inspection and for other tools.
  */
 
-import type { Dataset, TrainingExample } from './types.js';
+import type { Dataset, PreferenceDataset, TrainingExample } from './types.js';
 import { outputToString } from './validate.js';
 
 /** Raw JSONL: one example object per line (for inspection / re-import). */
@@ -38,6 +38,27 @@ export function toOpenAIChatJsonl(dataset: Dataset, opts: OpenAIExportOptions = 
       messages.push({ role: 'user', content: ex.input });
       messages.push({ role: 'assistant', content: outputToString(ex.output) });
       return JSON.stringify({ messages });
+    })
+    .join('\n');
+}
+
+/**
+ * DPO preference JSONL: one `{ "prompt", "chosen", "rejected" }` object per line.
+ * This is the shape TRL's DPOTrainer and most preference-tuning tooling expect
+ * (see docs/github-extraction-report.md, repo #5). The optional system prompt is
+ * prepended to the prompt as a chat turn pair when present, matching the SFT
+ * export's convention; `reason`/`safetyLabel` are review metadata and are
+ * intentionally omitted from the training record.
+ */
+export function toDpoJsonl(
+  dataset: PreferenceDataset,
+  opts: OpenAIExportOptions = {},
+): string {
+  return dataset.examples
+    .map((ex) => {
+      const system = ex.system ?? opts.defaultSystem;
+      const prompt = system ? `${system}\n\n${ex.prompt}` : ex.prompt;
+      return JSON.stringify({ prompt, chosen: ex.chosen, rejected: ex.rejected });
     })
     .join('\n');
 }
