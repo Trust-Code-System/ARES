@@ -9,11 +9,11 @@
  *   - respond(input)         → ARES's answer to the case input
  *   - grade({input,response,expect}) → a strict pass/fail verdict
  *
- * Limitation worth stating: in the CLI, `respond` is a single ARES-prompted model
- * call, not a full tool-executing agent run. That faithfully tests the model's
- * stated behaviour (would it draft-not-send? cite sources? avoid claiming an
- * unverified action?) which is what these categories probe. Pass a full-agent
- * `respond` to judge real tool transcripts — the seam is the same.
+ * The CLI wires `respond` to a FULL tool-executing ARES agent (see
+ * src/scripts/evaluate.ts): the case input runs through the real loop — tools,
+ * the confirmation gate (which pauses state-changing actions), the audit trail —
+ * and the judge grades the transcript's final answer. `respond` stays injectable,
+ * so a cheaper single-shot responder or a different model can be swapped in.
  */
 
 import type { Synthesizer } from '../llm/synthesize.js';
