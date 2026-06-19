@@ -18,6 +18,7 @@ import type { MessageClient } from '../agent/orchestrator.js';
 import type { EmbeddingClient } from './embeddings.js';
 import type { SemanticStore, StructuredStore } from './stores.js';
 import { STRUCTURED_KINDS, type NewMemoryChunk, type NewStructuredFact, type StructuredKind } from './types.js';
+import { containsSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 const EXTRACTION_TOOL: Anthropic.Tool = {
   name: 'record_memory',
@@ -83,7 +84,8 @@ export class MemoryIngestor implements MemoryWriter {
 
   async ingest(turn: MemoryTurn): Promise<void> {
     try {
-      await Promise.all([this.embedExchange(turn), this.extractFacts(turn)]);
+      const safeTurn = sanitizeTurn(turn);
+      await Promise.all([this.embedExchange(safeTurn), this.extractFacts(safeTurn)]);
     } catch (err) {
       // Memory is best-effort relative to the user's turn — never fatal.
       this.opts.logger.error('memory ingestion failed', {
@@ -156,6 +158,7 @@ function normalizeFact(raw: unknown, runId: string): NewStructuredFact | null {
   const subject = typeof r.subject === 'string' ? r.subject.trim() : '';
   const content = typeof r.content === 'string' ? r.content.trim() : '';
   if (!isKind(kind) || !subject || !content) return null;
+  if (containsSensitiveData({ subject, content })) return null;
 
   return {
     kind,
@@ -164,6 +167,14 @@ function normalizeFact(raw: unknown, runId: string): NewStructuredFact | null {
     confidence: clamp01(r.confidence, 0.9),
     importance: clamp01(r.importance, 0.5),
     sourceRun: runId,
+  };
+}
+
+function sanitizeTurn(turn: MemoryTurn): MemoryTurn {
+  return {
+    ...turn,
+    userText: redactSensitiveText(turn.userText),
+    assistantText: redactSensitiveText(turn.assistantText),
   };
 }
 

@@ -211,12 +211,19 @@ export class ApiServer {
       res.end();
       return;
     }
-    const { text, mode, model, history } = parsed.data;
+    const { text, mode, model, effort, history } = parsed.data;
 
     send('start', { text, mode: mode ?? 'general' });
     const liveEvents: unknown[] = [];
     const result = await this.opts.deps.agent.run(
-      { text, source: 'user', ...(mode ? { mode } : {}), ...(model ? { model } : {}), ...(history ? { history } : {}) },
+      {
+        text,
+        source: 'user',
+        ...(mode ? { mode } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+        ...(history ? { history } : {}),
+      },
       controller.signal,
       {
         onText: (token) => send('token', { token }),

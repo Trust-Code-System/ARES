@@ -17,6 +17,7 @@ import {
   type Part,
 } from '@google/genai';
 import type { CreateMessageParams, ModelTier } from './anthropic.js';
+import { redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 interface GeminiSdk {
   models: {
@@ -59,9 +60,9 @@ export class GeminiClient {
     const tier = params.tier ?? 'reasoning';
     const request: GenerateContentParameters = {
       model: this.models[tier],
-      contents: this.toGeminiContents(params.messages),
+      contents: this.toGeminiContents(redactSensitiveData(params.messages)),
       config: {
-        systemInstruction: params.system,
+        systemInstruction: redactSensitiveText(params.system),
         maxOutputTokens: params.maxTokens ?? 16000,
         tools: params.tools.length
           ? [{

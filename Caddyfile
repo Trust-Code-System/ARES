@@ -8,7 +8,7 @@
 
 {$ARES_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy web:3000
+	reverse_proxy web:3002
 }
 
 api.{$ARES_DOMAIN} {

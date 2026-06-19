@@ -1,0 +1,14 @@
+# Caddyfile for local development (no TLS).
+# Use this for localhost development.
+
+:3002 {
+	encode zstd gzip
+	reverse_proxy web:3002
+}
+
+:3001 {
+	# Stream Server-Sent Events without buffering for live token arrival.
+	reverse_proxy api:3001 {
+		flush_interval -1
+	}
+}

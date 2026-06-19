@@ -12,6 +12,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export type ModelTier = 'reasoning' | 'fast';
 
@@ -67,9 +68,9 @@ export class AnthropicClient {
       // interleaves it between tool calls. `summarized` so traces are legible.
       thinking: params.thinking ?? { type: 'adaptive', display: 'summarized' },
       output_config: { effort: 'high' },
-      system: params.system,
+      system: redactSensitiveText(params.system),
       tools: params.tools,
-      messages: params.messages,
+      messages: redactSensitiveData(params.messages),
       ...(params.toolChoice ? { tool_choice: params.toolChoice } : {}),
     };
     const options = params.signal ? { signal: params.signal } : undefined;

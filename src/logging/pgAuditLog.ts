@@ -14,6 +14,7 @@
 
 import type { AuditEvent, AuditLog, Logger } from '../types.js';
 import type { Db } from '../db/client.js';
+import { redactSensitiveData } from '../security/redactor.js';
 
 export class PostgresAuditLog implements AuditLog {
   private readonly queue: AuditEvent[] = [];
@@ -31,7 +32,7 @@ export class PostgresAuditLog implements AuditLog {
   ) {}
 
   record(event: AuditEvent): void {
-    const stored = structuredClone(event);
+    const stored = redactSensitiveData(structuredClone(event));
     this.mirror.push(stored);
     if (this.mirror.length > this.mirrorLimit) this.mirror.shift();
     this.queue.push(stored);
@@ -57,7 +58,7 @@ export class PostgresAuditLog implements AuditLog {
       runId: r.run_id,
       ts: new Date(r.ts).toISOString(),
       type: r.type,
-      detail: r.detail ?? {},
+          detail: redactSensitiveData(r.detail ?? {}),
     }));
   }
 

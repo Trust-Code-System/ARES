@@ -3,6 +3,7 @@ import type { StructuredStore } from '../../memory/stores.js';
 import { STRUCTURED_KINDS } from '../../memory/types.js';
 import type { Tool } from '../../types.js';
 import { defineTool } from '../define.js';
+import { containsSensitiveData } from '../../security/redactor.js';
 
 export function createMemoryTools(store: StructuredStore): Tool[] {
   const searchMemory = defineTool({
@@ -35,6 +36,12 @@ export function createMemoryTools(store: StructuredStore): Tool[] {
       importance: z.number().min(0).max(1).optional(),
     }),
     async execute(input, ctx) {
+      if (containsSensitiveData(input)) {
+        return {
+          ok: false,
+          content: 'ARES does not store passwords, OTPs, PINs, private keys, seed phrases, CVV values, session cookies, or authentication secrets. Use a password manager for secrets.',
+        };
+      }
       const fact = await store.upsert({
         kind: input.kind,
         subject: input.subject,

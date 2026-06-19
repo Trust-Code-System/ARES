@@ -96,6 +96,8 @@ export default function Dashboard() {
   }
 
   const enabledTools = tools.filter((tool) => tool.enabled).length;
+  const blueprint = runtime?.capabilities ?? [];
+  const enabledCapabilities = blueprint.filter((capability) => capability.enabled).length;
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-10 px-3 py-4 sm:px-6 sm:py-5 lg:px-8">
@@ -228,6 +230,9 @@ export default function Dashboard() {
             </Link>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {blueprint.length > 0 && (
+              <Capability name="Blueprint coverage" detail={`${enabledCapabilities} of ${blueprint.length} capability lanes active`} enabled={enabledCapabilities > 0} warning={enabledCapabilities < blueprint.length} />
+            )}
             <Capability name="Reasoning engine" detail={runtime ? `${runtime.provider} / ${runtime.model}` : 'Detecting'} enabled={Boolean(runtime)} />
             <Capability name="Personal memory" detail={runtime?.persistentMemory ? 'Postgres + semantic retrieval' : 'Ephemeral memory only'} enabled={Boolean(runtime?.persistentMemory)} warning={!runtime?.persistentMemory} />
             <Capability name="Web research" detail="Search + guarded page retrieval" enabled={Boolean(runtime?.webSearchEnabled)} warning={!runtime?.webSearchEnabled} />

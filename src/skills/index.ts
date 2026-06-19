@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { Tool, ToolResult } from '../types.js';
 import { defineTool } from '../tools/define.js';
 import { loadSkillIndex, MAX_SKILL_BODY_BYTES, type SkillIndex } from './loader.js';
+import { installSkillRepo, type InstallSkillRepoOptions } from './installer.js';
 import type { SkillUsageStore } from './usage.js';
 
 export interface SkillToolsOptions {
@@ -24,6 +25,8 @@ export interface SkillToolsOptions {
   skillsDir: string;
   /** Optional skill-usage memory; `use_skill` records each successful load. */
   usageStore?: SkillUsageStore;
+  /** Test seam for the GitHub skill-repo installer. */
+  installer?: (opts: InstallSkillRepoOptions) => Promise<Awaited<ReturnType<typeof installSkillRepo>>>;
 }
 
 /**
@@ -33,7 +36,8 @@ export interface SkillToolsOptions {
 export const SKILLS_PROMPT_NOTE =
   'You have a large library of expert skills (domain playbooks). When a task ' +
   'could benefit from specialized expertise, call find_skill to locate a relevant ' +
-  'one, then use_skill to load its playbook and follow it.';
+  'one, then use_skill to load its playbook and follow it. When the principal ' +
+  'asks to add skills from a pasted GitHub repository URL, call install_skill_repo.';
 
 const DEFAULT_FIND_LIMIT = 5;
 
@@ -149,7 +153,72 @@ export function createSkillTools(opts: SkillToolsOptions): Tool[] {
     },
   });
 
-  return [findSkill, useSkill];
+  const installSkillRepoTool = defineTool({
+    name: 'install_skill_repo',
+    description:
+      'Install a GitHub repository containing ARES/Codex/Claude-style SKILL.md ' +
+      'playbooks into the skill library, then refresh find_skill/use_skill so the ' +
+      'new skills are immediately available. Use when the principal pastes a ' +
+      'GitHub repo URL and asks to add its skills. This clones files only; it does ' +
+      'not execute repository code. State-mutating and confirmation-gated.',
+    kind: 'state_mutating',
+    schema: z.object({
+      url: z.string().describe('GitHub repository URL, e.g. https://github.com/org/skill-pack.'),
+      ref: z.string().describe('Optional branch, tag, or ref. Overrides a /tree/... URL ref.').optional(),
+      overwrite: z
+        .boolean()
+        .describe('Replace an already-installed copy of this repo. Default true.')
+        .optional(),
+      block_severity: z
+        .enum(['critical', 'high', 'medium', 'low'])
+        .describe('Refuse activation when the static scanner finds this severity or worse. Default critical.')
+        .optional(),
+    }),
+    async execute(input, ctx): Promise<ToolResult> {
+      const installer = opts.installer ?? installSkillRepo;
+      const installed = await installer({
+        skillsDir: opts.skillsDir,
+        url: input.url,
+        ...(input.ref ? { ref: input.ref } : {}),
+        ...(input.overwrite !== undefined ? { overwrite: input.overwrite } : {}),
+        ...(input.block_severity ? { blockSeverity: input.block_severity } : {}),
+        logger: ctx.logger,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      });
+      cached = undefined;
+      const idx = index(ctx.logger);
+      ctx.logger.info('skill repo installed', {
+        repo: `${installed.owner}/${installed.repo}`,
+        skillsInstalled: installed.skillsInstalled,
+        totalSkills: idx.size,
+      });
+
+      const findingLine = installed.worstFinding
+        ? `\nWorst scanner finding: ${installed.worstFinding}`
+        : '\nScanner: no findings.';
+      return {
+        ok: true,
+        content:
+          `Installed ${installed.skillsInstalled} skill(s) from ${installed.owner}/${installed.repo}.` +
+          `\nDirectory: ${installed.dir}` +
+          `\nThe skill library now has ${idx.size} skill(s).` +
+          findingLine +
+          '\nUse find_skill to search the newly installed skills.',
+        data: {
+          owner: installed.owner,
+          repo: installed.repo,
+          ref: installed.ref,
+          dir: installed.dir,
+          skillsInstalled: installed.skillsInstalled,
+          totalSkills: idx.size,
+          worstFinding: installed.worstFinding,
+          scanReport: installed.scanReport,
+        },
+      };
+    },
+  });
+
+  return [findSkill, useSkill, installSkillRepoTool];
 }
 
 function truncate(text: string, max: number): string {

@@ -65,6 +65,7 @@ export default function ChatPage() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [mode, setMode] = useState<AssistantMode>('general');
   const [modelChoice, setModelChoice] = useState<string>('auto');
+  const [effort, setEffort] = useState<string>('standard');
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [speaking, setSpeaking] = useState(false);
@@ -185,6 +186,8 @@ export default function ChatPage() {
       if (window.localStorage.getItem(WAKE_STORAGE_KEY) === 'off') setWakeEnabled(false);
       const savedModel = window.localStorage.getItem(MODEL_STORAGE_KEY);
       if (savedModel) setModelChoice(savedModel);
+      const savedEffort = window.localStorage.getItem(EFFORT_STORAGE_KEY);
+      if (savedEffort) setEffort(savedEffort);
     } catch {
       // ignore
     }
@@ -211,6 +214,16 @@ export default function ChatPage() {
     }
   }, [modelChoice, hydrated]);
 
+  // Remember the effort/depth choice across reloads.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(EFFORT_STORAGE_KEY, effort);
+    } catch {
+      // ignore
+    }
+  }, [effort, hydrated]);
+
   // If the saved/selected model isn't among the server's offered options, fall back
   // to Auto so a stale choice (e.g. a provider whose key was removed) can't get stuck.
   useEffect(() => {
@@ -218,6 +231,13 @@ export default function ChatPage() {
     if (!options || options.length === 0) return;
     if (!options.some((opt) => opt.id === modelChoice)) setModelChoice('auto');
   }, [runtime, modelChoice]);
+
+  // Likewise, drop a stale effort value the server no longer offers.
+  useEffect(() => {
+    const levels = runtime?.effortLevels;
+    if (!levels || levels.length === 0) return;
+    if (!levels.includes(effort)) setEffort('standard');
+  }, [runtime, effort]);
 
   // Persist the active thread's transcript whenever it settles (skip mid-stream churn),
   // and keep that thread's title/timestamp in the index up to date.
@@ -387,6 +407,11 @@ export default function ChatPage() {
     }
   }
 
+  /** True when the runtime reports a capability (by blueprint id) as enabled. */
+  function capabilityEnabled(id: string): boolean {
+    return Boolean(runtime?.capabilities?.find((c) => c.id === id)?.enabled);
+  }
+
   /** Ask ARES for an on-demand spoken briefing through the normal chat path. */
   function requestBriefing() {
     if (!connected || streaming) return;
@@ -420,6 +445,22 @@ export default function ChatPage() {
       case 'search':
         if (!arg) return flashToast('Usage: /search <query>', 'amber');
         return void runSearch(arg);
+      case 'research':
+        if (!arg) return flashToast('Usage: /research <question>', 'amber');
+        if (!capabilityEnabled('deep_research')) {
+          return addSystemMessage('Deep research is not configured (needs a web search provider).');
+        }
+        flashToast('Researching...', 'cyan');
+        return void send(
+          `Run deep research with the deep_research tool and give me a cited report on: ${arg}`,
+        );
+      case 'image':
+        if (!arg) return flashToast('Usage: /image <prompt>', 'amber');
+        if (!capabilityEnabled('image_generation_boundary')) {
+          return addSystemMessage('Image generation is not configured (needs an image provider key).');
+        }
+        flashToast('Generating image...', 'cyan');
+        return void send(`Generate an image with the generate_image tool: ${arg}`);
       case 'help':
         return addSystemMessage(SLASH_HELP);
       default:
@@ -519,7 +560,7 @@ export default function ChatPage() {
             setLastError(failure);
           }
         },
-      }, { mode, model: modelChoice, signal: controller.signal, history });
+      }, { mode, model: modelChoice, effort, signal: controller.signal, history });
 
       if (turnGen !== turnGenRef.current) return;
       if (failure) {
@@ -967,6 +1008,23 @@ export default function ChatPage() {
                   </select>
                 </>
               )}
+              {(runtime?.effortLevels?.length ?? 0) > 0 && (
+                <>
+                  <label htmlFor="effort-choice" className="hud-label hidden shrink-0 sm:block">Depth</label>
+                  <select
+                    id="effort-choice"
+                    value={effort}
+                    onChange={(event) => setEffort(event.target.value)}
+                    title={EFFORT_HINTS[effort] ?? 'How hard ARES works the turn'}
+                    className="h-9 shrink-0 border border-ares-line bg-ares-bg px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ares-cyan outline-none"
+                    disabled={streaming}
+                  >
+                    {runtime!.effortLevels!.map((level) => (
+                      <option key={level} value={level}>{level}</option>
+                    ))}
+                  </select>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1149,14 +1207,24 @@ export default function ChatPage() {
 
 const SLASH_HELP = [
   'Commands:',
-  '  /remember <fact>   pin a fact to long-term memory',
-  '  /task <title>      create a task',
-  '  /search <query>    search semantic memory',
-  '  /help              show this list',
+  '  /remember <fact>      pin a fact to long-term memory',
+  '  /task <title>         create a task',
+  '  /search <query>       search semantic memory',
+  '  /research <question>  deep, cited multi-source research',
+  '  /image <prompt>       generate an image into the workspace',
+  '  /help                 show this list',
 ].join('\n');
 
 const WAKE_STORAGE_KEY = 'ares.wake.enabled';
 const MODEL_STORAGE_KEY = 'ares.model.choice';
+const EFFORT_STORAGE_KEY = 'ares.effort.choice';
+
+/** Tooltips for the response-depth switch (keyed by effort level). */
+const EFFORT_HINTS: Record<string, string> = {
+  quick: 'Quick: brief, direct answers with a tight tool budget',
+  standard: 'Standard: ARES decides how much depth the turn needs',
+  deep: 'Deep: thorough, verified, multi-angle work on the reasoning model',
+};
 const MAX_SAVED_MESSAGES = 100;
 const BRIEFING_REQUEST =
   "Give me my briefing for today — today's weather, my calendar, and my open tasks. Keep it concise and natural to listen to.";
@@ -1170,6 +1238,10 @@ const ASSISTANT_MODES: AssistantMode[] = [
   'business',
   'project',
   'document',
+  'design',
+  'data',
+  'office',
+  'automation',
   'hr',
   'communications',
 ];

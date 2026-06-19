@@ -12,6 +12,7 @@ import type { MemoryRetriever } from '../types.js';
 import type { EmbeddingClient } from './embeddings.js';
 import type { SemanticStore, StructuredStore } from './stores.js';
 import type { StructuredFact } from './types.js';
+import { redactSensitiveText } from '../security/redactor.js';
 
 export class NullMemoryRetriever implements MemoryRetriever {
   async retrieve(): Promise<string> {
@@ -43,10 +44,11 @@ export class DbMemoryRetriever implements MemoryRetriever {
   }
 
   async retrieve(query: string): Promise<string> {
-    const [queryEmbedding] = await this.opts.embeddings.embed([query], 'query');
+    const safeQuery = redactSensitiveText(query);
+    const [queryEmbedding] = await this.opts.embeddings.embed([safeQuery], 'query');
 
     const [facts, hits] = await Promise.all([
-      this.opts.structured.search(query, this.structuredTopK),
+      this.opts.structured.search(safeQuery, this.structuredTopK),
       queryEmbedding
         ? this.opts.semantic.search(queryEmbedding, this.semanticTopK, this.minSimilarity)
         : Promise.resolve([]),
@@ -75,10 +77,10 @@ export class DbMemoryRetriever implements MemoryRetriever {
 
 function formatFact(f: StructuredFact): string {
   const conf = f.confidence < 0.75 ? ` _(confidence ${(f.confidence * 100).toFixed(0)}%)_` : '';
-  return `- [${f.kind}] ${f.subject}: ${f.content}${conf}`;
+  return redactSensitiveText(`- [${f.kind}] ${f.subject}: ${f.content}${conf}`);
 }
 
 function oneLine(text: string, max = 240): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
+  const flat = redactSensitiveText(text).replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }

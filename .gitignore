@@ -8,3 +8,8 @@ dist/
 .DS_Store
 .qodo/
 workspace/
+mcp.servers.json
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

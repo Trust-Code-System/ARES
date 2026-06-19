@@ -11,6 +11,7 @@
  */
 
 import type { AuditEvent, AuditLog, Logger, LogLevel } from '../types.js';
+import { redactSensitiveData } from '../security/redactor.js';
 
 const COLORS: Record<LogLevel, string> = {
   debug: '\x1b[90m', // grey
@@ -35,7 +36,7 @@ export class ConsoleLogger implements Logger {
     const tag = `${COLORS[level]}${level.toUpperCase().padEnd(5)}${RESET}`;
     const time = new Date().toISOString().slice(11, 19);
     const suffix =
-      meta && Object.keys(meta).length > 0 ? ` ${safeJson(meta)}` : '';
+      meta && Object.keys(meta).length > 0 ? ` ${safeJson(redactSensitiveData(meta))}` : '';
     // eslint-disable-next-line no-console
     console.log(`${time} ${tag} ${msg}${suffix}`);
   }
@@ -56,7 +57,7 @@ export class InMemoryAuditLog implements AuditLog {
   constructor(private readonly mirror?: Logger) {}
 
   record(event: AuditEvent): void {
-    const stored = structuredClone(event);
+    const stored = redactSensitiveData(structuredClone(event));
     this.events.push(stored);
     this.mirror?.debug(`audit:${stored.type}`, { runId: stored.runId, ...stored.detail });
   }

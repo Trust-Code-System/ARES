@@ -21,6 +21,7 @@ import type {
   StructuredKind,
 } from './types.js';
 import { dedupeKey } from './types.js';
+import { containsSensitiveData, redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export interface SemanticStore {
   /** Persist embedded chunks. `embeddings[i]` corresponds to `chunks[i]`. */
@@ -59,8 +60,11 @@ export class InMemorySemanticStore implements SemanticStore {
 
   async add(chunks: NewMemoryChunk[], embeddings: number[][]): Promise<void> {
     chunks.forEach((c, i) => {
+      const safeContent = redactSensitiveText(c.content);
       this.chunks.push({
         ...c,
+        content: safeContent,
+        metadata: redactSensitiveData(c.metadata ?? {}),
         id: randomUUID(),
         embedding: embeddings[i] ?? [],
         createdAt: new Date().toISOString(),
@@ -95,6 +99,9 @@ export class InMemoryStructuredStore implements StructuredStore {
   private readonly byKey = new Map<string, StructuredFact>();
 
   async upsert(fact: NewStructuredFact): Promise<StructuredFact> {
+    if (containsSensitiveData(fact)) {
+      throw new Error('Refusing to store sensitive authentication data in memory.');
+    }
     const key = dedupeKey(fact.kind, fact.subject, fact.content);
     const now = new Date().toISOString();
     const existing = this.byKey.get(key);
@@ -102,8 +109,8 @@ export class InMemoryStructuredStore implements StructuredStore {
       id: existing?.id ?? randomUUID(),
       kind: fact.kind,
       subject: fact.subject,
-      content: fact.content,
-      attributes: fact.attributes ?? {},
+      content: redactSensitiveText(fact.content),
+      attributes: redactSensitiveData(fact.attributes ?? {}),
       confidence: fact.confidence ?? 1,
       importance: fact.importance ?? 0.5,
       sourceRun: fact.sourceRun ?? existing?.sourceRun ?? null,

@@ -22,7 +22,7 @@ function fakeAgent(audit: InMemoryAuditLog): ApiDeps['agent'] {
         runId,
         ts: new Date().toISOString(),
         type: 'run_started',
-        detail: { text: input.text, mode: input.mode ?? 'general' },
+        detail: { text: input.text, mode: input.mode ?? 'general', history: input.history?.length ?? 0 },
       });
       return { runId, finalText: `echo: ${input.text}`, stopReason: 'completed', iterations: 1, toolCalls: [] };
     },
@@ -84,10 +84,15 @@ describe('ApiHandler', () => {
 
   it('accepts a specialist mode, rejects invalid modes, and reports runtime status', async () => {
     const { handler } = build();
-    const valid = await handler.handle(req('POST', '/api/chat', { text: 'review this', mode: 'developer' }));
+    const valid = await handler.handle(req('POST', '/api/chat', {
+      text: 'review this',
+      mode: 'design',
+      history: [{ role: 'user', content: 'previous context' }],
+    }));
     assert.equal(valid.status, 200);
     const events = (valid.body as { events: Array<{ detail: { mode?: string } }> }).events;
-    assert.equal(events[0]?.detail.mode, 'developer');
+    assert.equal(events[0]?.detail.mode, 'design');
+    assert.equal((events[0]?.detail as { history?: number }).history, 1);
 
     const invalid = await handler.handle(req('POST', '/api/chat', { text: 'hello', mode: 'wizard' }));
     assert.equal(invalid.status, 400);
@@ -95,6 +100,9 @@ describe('ApiHandler', () => {
     const status = await handler.handle(req('GET', '/api/status'));
     assert.equal(status.status, 200);
     assert.equal(typeof (status.body as { voiceEnabled: boolean }).voiceEnabled, 'boolean');
+    const capabilities = (status.body as { capabilities: unknown[] }).capabilities;
+    assert.ok(Array.isArray(capabilities));
+    assert.equal(capabilities.length, 23);
   });
 
   it('reads and flips the kill switch', async () => {

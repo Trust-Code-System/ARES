@@ -14,6 +14,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import type { ConfirmationGate, GateDecision, Logger, Tool } from '../types.js';
+import { containsSensitiveData, redactSensitiveData } from '../security/redactor.js';
 
 export type ConfirmationMode = 'auto' | 'deny' | 'prompt';
 export type ConfirmationPrompt = (question: string) => Promise<string>;
@@ -30,6 +31,13 @@ export class BasicConfirmationGate implements ConfirmationGate {
     input: unknown;
     runId: string;
   }): Promise<GateDecision> {
+    if (containsSensitiveData(req.input)) {
+      return {
+        approved: false,
+        reason:
+          'blocked: tool input appears to contain a password, OTP, PIN, private key, cookie, token, CVV, or other authentication secret.',
+      };
+    }
     switch (this.mode) {
       case 'auto':
         return { approved: true, reason: 'auto-approve mode (dev)' };
@@ -49,7 +57,7 @@ export class BasicConfirmationGate implements ConfirmationGate {
     stdout.write(
       `\n\x1b[33m⚠  ARES wants to run a state-mutating tool:\x1b[0m\n` +
         `   tool:  ${tool.name}\n` +
-        `   input: ${JSON.stringify(input)}\n`,
+        `   input: ${JSON.stringify(redactSensitiveData(input))}\n`,
     );
     const answer = (await this.ask('   approve? [y/N] ')).trim().toLowerCase();
     const approved = answer === 'y' || answer === 'yes';

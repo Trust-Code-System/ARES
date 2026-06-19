@@ -19,6 +19,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../types.js';
+import { installedRepoRootFor } from './installPaths.js';
 
 /** Max bytes of a SKILL.md body returned to the model (keeps context bounded). */
 export const MAX_SKILL_BODY_BYTES = 64 * 1024;
@@ -277,8 +278,15 @@ export function loadSkillIndex(skillsDir: string, logger?: Logger): SkillIndex {
         continue;
       }
 
-      const rel = path.relative(root, bodyPath).split(path.sep);
-      const pathCategory = rel.length > 1 && rel[0] ? rel[0] : 'general';
+      const installedRepo = installedRepoRootFor(root, bodyPath);
+      const recordRoot = installedRepo?.root ?? root;
+      const rel = path.relative(recordRoot, bodyPath).split(path.sep);
+      const pathCategory =
+        rel.length > 1 && rel[0]
+          ? rel[0]
+          : installedRepo
+            ? `${installedRepo.owner}-${installedRepo.repo}`
+            : 'general';
       const category = meta?.category ?? pathCategory;
       const id = meta?.id ?? `${category}/${name}`;
       if (byId.has(id)) {
@@ -297,7 +305,9 @@ export function loadSkillIndex(skillsDir: string, logger?: Logger): SkillIndex {
         scripts,
         riskLevel: meta?.risk_level ?? 'low',
         triggerKeywords: (meta?.trigger_keywords ?? []).map((t) => t.toLowerCase()),
-        ...(meta?.source_repo ? { sourceRepo: meta.source_repo } : {}),
+        ...(meta?.source_repo || installedRepo
+          ? { sourceRepo: meta?.source_repo ?? `https://github.com/${installedRepo?.owner}/${installedRepo?.repo}` }
+          : {}),
         ...(meta?.version ? { version: meta.version } : {}),
       };
       records.push(record);

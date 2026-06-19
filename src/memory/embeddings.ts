@@ -12,6 +12,8 @@
  * without a network call. Production paths use {@link VoyageEmbeddingClient}.
  */
 
+import { redactSensitiveText } from '../security/redactor.js';
+
 export interface EmbeddingClient {
   /** Dimensionality of the vectors this client produces (must match the schema). */
   readonly dimension: number;
@@ -41,6 +43,7 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
 
   async embed(texts: string[], inputType: 'query' | 'document'): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const safeTexts = texts.map(redactSensitiveText);
     const res = await fetch(`${this.baseUrl}/embeddings`, {
       method: 'POST',
       headers: {
@@ -49,7 +52,7 @@ export class VoyageEmbeddingClient implements EmbeddingClient {
       },
       body: JSON.stringify({
         model: this.model,
-        input: texts,
+        input: safeTexts,
         input_type: inputType,
         output_dimension: this.dimension,
       }),
@@ -102,6 +105,7 @@ export class GeminiEmbeddingClient implements EmbeddingClient {
 
   async embed(texts: string[], inputType: 'query' | 'document'): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const safeTexts = texts.map(redactSensitiveText);
     const taskType = inputType === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT';
     const modelPath = `models/${this.model}`;
     const res = await this.fetchImpl(
@@ -110,7 +114,7 @@ export class GeminiEmbeddingClient implements EmbeddingClient {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify({
-          requests: texts.map((text) => ({
+          requests: safeTexts.map((text) => ({
             model: modelPath,
             content: { parts: [{ text }] },
             taskType,
@@ -125,8 +129,8 @@ export class GeminiEmbeddingClient implements EmbeddingClient {
     }
     const json = (await res.json()) as { embeddings?: { values: number[] }[] };
     const rows = json.embeddings ?? [];
-    if (rows.length !== texts.length) {
-      throw new Error(`Gemini embeddings returned ${rows.length} vectors for ${texts.length} inputs.`);
+    if (rows.length !== safeTexts.length) {
+      throw new Error(`Gemini embeddings returned ${rows.length} vectors for ${safeTexts.length} inputs.`);
     }
     // Gemini's MRL truncation isn't renormalized; do it here so cosine distance is well-behaved.
     return rows.map((row) => normalize(row.values));
@@ -148,7 +152,7 @@ export class HashEmbeddingClient implements EmbeddingClient {
   constructor(readonly dimension: number = 1024) {}
 
   async embed(texts: string[], _inputType: 'query' | 'document'): Promise<number[][]> {
-    return texts.map((t) => this.embedOne(t));
+    return texts.map((t) => this.embedOne(redactSensitiveText(t)));
   }
 
   private embedOne(text: string): number[] {

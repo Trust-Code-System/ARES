@@ -168,6 +168,12 @@ export interface AgentInput {
    */
   model?: string;
   /**
+   * Per-turn response depth: `quick`, `standard`, or `deep`. Orthogonal to
+   * {@link model} — it controls how hard ARES works the turn (tool budget, tier
+   * bias, thoroughness). Parsed by `parseEffort`; unknown/absent → `standard`.
+   */
+  effort?: string;
+  /**
    * Prior conversation turns, oldest first, so the model has multi-turn context.
    * Text-only (no tool blocks); the orchestrator normalizes them into a valid
    * alternating user/assistant transcript before the current {@link text}.
@@ -182,6 +188,10 @@ export type AssistantMode =
   | 'business'
   | 'project'
   | 'document'
+  | 'design'
+  | 'data'
+  | 'office'
+  | 'automation'
   | 'hr'
   | 'communications';
 

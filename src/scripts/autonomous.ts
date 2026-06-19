@@ -15,8 +15,11 @@ import { argv } from 'node:process';
 import { loadConfig } from '../config.js';
 import { ConsoleLogger } from '../logging/logger.js';
 import { buildLlmClient } from '../llm/factory.js';
+import { buildSynthesizer } from '../llm/synthesize.js';
+import { buildImageGenerator } from '../llm/imageGen.js';
 import { createDefaultRegistry } from '../tools/index.js';
 import { SKILLS_PROMPT_NOTE } from '../skills/index.js';
+import { AGENTS_PROMPT_NOTE } from '../agents/index.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
 import { PaperBrokerProvider } from '../tools/builtin/trading.js';
 import { buildGithubClient } from '../tools/builtin/github.js';
@@ -24,13 +27,23 @@ import { buildMemoryBackend } from '../memory/factory.js';
 import { buildSafetyBackend } from '../safety/factory.js';
 import { buildAutonomyBackend } from '../autonomy/factory.js';
 import { buildMcpTools } from '../mcp/factory.js';
+import { MCP_MANAGEMENT_PROMPT_NOTE } from '../mcp/tools.js';
 import { Agent } from '../agent/orchestrator.js';
+import { ARES_CAPABILITY_PROMPT } from '../agent/capabilities.js';
 import { AutonomousRunner } from '../autonomy/runner.js';
 
 const SYSTEM_PROMPT = `You are ARES, a personal autonomous assistant for a single principal user, running WITHOUT a human present.
 - You cannot ask the user anything right now; make reasonable decisions and note what you would confirm.
 - State-mutating tools are gated; with no human present they queue for later approval rather than executing. Plan around that — gather information and prepare actions, don't assume a mutation succeeded.
 - Be concise. Produce a result the user can read later.`;
+
+function buildSystemPrompt(config: ReturnType<typeof loadConfig>): string {
+  const notes: string[] = [];
+  if (config.skillsDir) notes.push(`- ${SKILLS_PROMPT_NOTE}`);
+  if (config.agentsDir) notes.push(`- ${AGENTS_PROMPT_NOTE}`);
+  notes.push(`- ${MCP_MANAGEMENT_PROMPT_NOTE}`);
+  return `${SYSTEM_PROMPT}\n\n${ARES_CAPABILITY_PROMPT}\n${notes.join('\n')}`;
+}
 
 async function main(): Promise<void> {
   const args = argv.slice(2);
@@ -58,6 +71,8 @@ async function main(): Promise<void> {
   const autonomy = buildAutonomyBackend(memory.db);
 
   const searchProvider = buildSearchProvider(config);
+  const synthesizer = buildSynthesizer(client);
+  const imageGenerator = buildImageGenerator();
   const mcp = await buildMcpTools(config, logger);
   const tradingProvider = config.trading.enabled
     ? new PaperBrokerProvider({ startingCash: config.trading.startingCash })
@@ -69,6 +84,8 @@ async function main(): Promise<void> {
     registry: createDefaultRegistry({
       workspaceDir: config.workspaceDir,
       ...(searchProvider ? { searchProvider } : {}),
+      synthesizer,
+      ...(imageGenerator ? { imageGenerator } : {}),
       shell: config.shell,
       python: config.python,
       systemActionsEnabled: config.systemActionsEnabled,
@@ -76,7 +93,9 @@ async function main(): Promise<void> {
       ...(tradingProvider ? { tradingProvider } : {}),
       ...(githubClient ? { githubClient } : {}),
       structuredStore: memory.structured,
+      mcpConfigPath: config.mcpConfigPath,
       ...(config.skillsDir ? { skills: { dir: config.skillsDir } } : {}),
+      ...(config.agentsDir ? { agents: { dir: config.agentsDir } } : {}),
       extraTools: mcp.tools,
     }),
     gate: safety.gate,
@@ -84,7 +103,7 @@ async function main(): Promise<void> {
     memoryWriter: memory.memoryWriter,
     logger,
     audit: memory.audit,
-    systemPrompt: config.skillsDir ? `${SYSTEM_PROMPT}\n- ${SKILLS_PROMPT_NOTE}` : SYSTEM_PROMPT,
+    systemPrompt: buildSystemPrompt(config),
     maxIterations: config.maxIterations,
   });
 

@@ -9,6 +9,11 @@ import { createFileTools } from './builtin/files.js';
 import { createTaskTools } from './builtin/tasks.js';
 import { webFetch } from './builtin/webFetch.js';
 import { createWebSearchTool, type SearchProvider } from './builtin/webSearch.js';
+import { createDeepResearchTool } from './builtin/deepResearch.js';
+import { createRecordingTool } from './builtin/recording.js';
+import { createImageGenerationTool } from './builtin/imageGeneration.js';
+import type { Synthesizer } from '../llm/synthesize.js';
+import type { ImageGenerator } from '../llm/imageGen.js';
 import { createShellTool, type ShellToolOptions } from './builtin/shell.js';
 import { createTradingTools, type BrokerProvider } from './builtin/trading.js';
 import { createGithubTools, type GithubClient } from './builtin/github.js';
@@ -20,6 +25,7 @@ import { createDocumentTools } from './builtin/documents.js';
 import { createRemotionTool } from './builtin/remotion.js';
 import { createSkillTools } from '../skills/index.js';
 import { createAgentTools } from '../agents/index.js';
+import { createMcpManagementTools } from '../mcp/tools.js';
 import type { Provider } from '../llm/router.js';
 import type { SkillUsageStore } from '../skills/usage.js';
 import type { VisionExtractor } from '../llm/vision.js';
@@ -31,6 +37,13 @@ export interface RegistryOptions {
   workspaceDir: string;
   /** Optional web-search backend. web_search is registered only when present. */
   searchProvider?: SearchProvider;
+  /**
+   * Single-shot LLM synthesizer. When present, analyze_transcript is registered;
+   * combined with a searchProvider it also enables deep_research.
+   */
+  synthesizer?: Synthesizer;
+  /** Image generator backend. generate_image is registered only when present. */
+  imageGenerator?: ImageGenerator;
   /** Sandboxed shell tool config. Registered only when `enabled` is true. */
   shell?: { enabled: boolean } & Omit<ShellToolOptions, 'workspaceDir'>;
   /** Dedicated Python tool config. Registered only when `enabled` is true. */
@@ -55,9 +68,9 @@ export interface RegistryOptions {
   /** Task store. When present, the create_task/list_tasks/update_task tools are registered. */
   taskStore?: TaskStore;
   /**
-   * Expert skill library. When present, the read-only find_skill/use_skill tools
-   * are registered over the vendored skills directory. An optional usageStore
-   * records each successful use_skill load (skill-usage memory).
+   * Expert skill library. When present, find_skill/use_skill and the gated
+   * install_skill_repo tool are registered over the vendored skills directory.
+   * An optional usageStore records each successful use_skill load.
    */
   skills?: { dir: string; usageStore?: SkillUsageStore };
   /**
@@ -68,6 +81,8 @@ export interface RegistryOptions {
   agents?: { dir: string; usageStore?: SkillUsageStore; availableProviders?: ReadonlySet<Provider> };
   /** Additional tools to register (e.g. tools imported from MCP servers). */
   extraTools?: Tool[];
+  /** Managed MCP config file for install/list/enable/disable MCP tools. */
+  mcpConfigPath?: string;
 }
 
 export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
@@ -87,6 +102,19 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
   }
 
   if (opts.searchProvider) registry.register(createWebSearchTool(opts.searchProvider));
+
+  // deep_research needs both a search backend and a synthesizer to write the report.
+  if (opts.searchProvider && opts.synthesizer) {
+    registry.register(createDeepResearchTool({ search: opts.searchProvider, synthesize: opts.synthesizer }));
+  }
+
+  // analyze_transcript (Record Mode) needs only a synthesizer.
+  if (opts.synthesizer) registry.register(createRecordingTool(opts.synthesizer));
+
+  // generate_image needs a configured image provider; it writes into the workspace jail.
+  if (opts.imageGenerator) {
+    registry.register(createImageGenerationTool(opts.imageGenerator, opts.workspaceDir));
+  }
 
   if (opts.shell?.enabled) {
     registry.register(
@@ -130,6 +158,10 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
 
   if (opts.taskStore) {
     for (const tool of createTaskTools(opts.taskStore)) registry.register(tool);
+  }
+
+  if (opts.mcpConfigPath) {
+    for (const tool of createMcpManagementTools({ configPath: opts.mcpConfigPath })) registry.register(tool);
   }
 
   if (opts.skills) {

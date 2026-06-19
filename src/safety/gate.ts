@@ -22,6 +22,7 @@ import type { ConfirmationGate, GateDecision, Logger, Tool } from '../types.js';
 import type { ConfirmationMode, ConfirmationPrompt } from '../tools/confirmation.js';
 import { evaluateRules, type ConfirmationQueueStore, type StandingRulesStore } from './store.js';
 import type { SpendCapEnforcer } from './caps.js';
+import { containsSensitiveData, redactSensitiveData } from '../security/redactor.js';
 
 export interface RuleBasedGateOptions {
   mode: ConfirmationMode;
@@ -42,6 +43,17 @@ export class RuleBasedConfirmationGate implements ConfirmationGate {
     input: unknown;
     runId: string;
   }): Promise<GateDecision> {
+    if (containsSensitiveData(req.input)) {
+      this.opts.logger.warn('action blocked because input contains sensitive authentication data', {
+        tool: req.tool.name,
+      });
+      return {
+        approved: false,
+        reason:
+          'blocked: tool input appears to contain a password, OTP, PIN, private key, cookie, token, CVV, or other authentication secret. Ask the user to enter it manually.',
+      };
+    }
+
     // 0. Spend/trade caps are a hard ceiling enforced in code: no mode, rule, or
     //    human can approve a call that breaches a cap. Checked before anything else.
     if (this.opts.caps) {
@@ -83,7 +95,7 @@ export class RuleBasedConfirmationGate implements ConfirmationGate {
     const item = await this.opts.queue.enqueue({
       runId: req.runId,
       tool: req.tool.name,
-      input: req.input,
+      input: redactSensitiveData(req.input),
       reason: 'no standing rule and no human present at decision time',
     });
     this.opts.logger.warn('action queued for approval', { tool: req.tool.name, queueId: item.id });
@@ -101,7 +113,7 @@ export class RuleBasedConfirmationGate implements ConfirmationGate {
     stdout.write(
       `\n\x1b[33m⚠  ARES wants to run a state-mutating tool:\x1b[0m\n` +
         `   tool:  ${tool.name}\n` +
-        `   input: ${JSON.stringify(input)}\n`,
+        `   input: ${JSON.stringify(redactSensitiveData(input))}\n`,
     );
     const answer = (
       await this.ask('   approve? [y]es / [n]o / [a]lways this exact input: ')
@@ -118,7 +130,7 @@ export class RuleBasedConfirmationGate implements ConfirmationGate {
       // one approval (for example, one recipient) to every future call.
       const rule = await this.opts.rules.add({
         tool: tool.name,
-        match: structuredClone(input as Record<string, unknown>),
+        match: redactSensitiveData(structuredClone(input as Record<string, unknown>)),
         effect: 'allow',
         reason: `user chose "always allow" for this ${tool.name} input`,
       });

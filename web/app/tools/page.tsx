@@ -113,22 +113,22 @@ export default function ToolSettings() {
         <div className="space-y-5 xl:col-span-5">
           <HudPanel title="Capability status" code="CAP-20">
             <div className="grid gap-2 sm:grid-cols-2">
-              <Capability name="Reasoning engine" detail={runtime ? `${runtime.provider} / ${runtime.model}` : 'Detecting'} enabled={Boolean(runtime)} />
-              <Capability
-                name="Voice conversation"
-                detail={runtime?.voiceEnabled
-                  ? `${runtime.voiceInputProvider ?? 'configured'} input + ${runtime.voiceOutputProvider ?? 'configured'} speech`
-                  : 'Configure STT + TTS providers'}
-                enabled={Boolean(runtime?.voiceEnabled)}
-                warning={!runtime?.voiceEnabled}
-              />
-              <Capability name="Personal memory" detail={runtime?.persistentMemory ? 'Postgres + semantic retrieval' : 'Ephemeral memory only'} enabled={Boolean(runtime?.persistentMemory)} warning={!runtime?.persistentMemory} />
-              <Capability name="Web research" detail="Search + guarded page retrieval" enabled={Boolean(runtime?.webSearchEnabled)} warning={!runtime?.webSearchEnabled} />
-              <Capability name="Python execution" detail="Confirmation-gated isolated runner" enabled={Boolean(runtime?.pythonEnabled)} warning={!runtime?.pythonEnabled} />
-              <Capability name="System actions" detail="Open approved apps and HTTP(S) sites" enabled={Boolean(runtime?.systemActionsEnabled)} warning={!runtime?.systemActionsEnabled} />
-              <Capability name="Trading tools" detail="Read-only by default; trades are gated" enabled={Boolean(runtime?.tradingEnabled)} warning={!runtime?.tradingEnabled} />
-              <Capability name="GitHub dev tools" detail="Search + read code; issue creation is gated" enabled={Boolean(runtime?.githubEnabled)} warning={!runtime?.githubEnabled} />
-              <Capability name="Connected apps" detail={runtime?.connectors.length ? runtime.connectors.join(', ') : 'No MCP connectors active'} enabled={Boolean(runtime?.connectors.length)} warning={!runtime?.connectors.length} />
+              {runtime?.capabilities?.length ? runtime.capabilities.map((capability) => (
+                <Capability
+                  key={capability.id}
+                  name={capability.label}
+                  detail={`${capability.strength}: ${capability.detail}`}
+                  enabled={capability.enabled}
+                  warning={!capability.enabled}
+                />
+              )) : (
+                <>
+                  <Capability name="Reasoning engine" detail={runtime ? `${runtime.provider} / ${runtime.model}` : 'Detecting'} enabled={Boolean(runtime)} />
+                  <Capability name="Personal memory" detail={runtime?.persistentMemory ? 'Postgres + semantic retrieval' : 'Ephemeral memory only'} enabled={Boolean(runtime?.persistentMemory)} warning={!runtime?.persistentMemory} />
+                  <Capability name="Web research" detail="Search + guarded page retrieval" enabled={Boolean(runtime?.webSearchEnabled)} warning={!runtime?.webSearchEnabled} />
+                  <Capability name="Connected apps" detail={runtime?.connectors.length ? runtime.connectors.join(', ') : 'No MCP connectors active'} enabled={Boolean(runtime?.connectors.length)} warning={!runtime?.connectors.length} />
+                </>
+              )}
             </div>
           </HudPanel>
 

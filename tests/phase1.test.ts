@@ -270,6 +270,26 @@ describe('fast conversational path', () => {
     assert.equal(memoryCalls, 1); // the full path retrieves memory
   });
 
+  it('deep effort forces the full agent even for small talk', async () => {
+    // Only the agent answer is mocked. If deep effort had let the turn take the
+    // chat fast-path, the classifier/chat call sequence would differ; here the
+    // single response is consumed as the full-agent answer and memory is retrieved.
+    const client = new SequenceClient([
+      message('end_turn', [{ type: 'text', text: 'Thorough answer.' }]),
+    ]);
+    let memoryCalls = 0;
+    const memory: MemoryRetriever = {
+      async retrieve() { memoryCalls += 1; return ''; },
+    };
+    const agent = makeAgent({ client, memory, enableFastChat: true });
+
+    const result = await agent.run({ text: 'Hi ARES!', source: 'user', effort: 'deep' });
+
+    assert.ok(!result.fastChat); // deep never short-circuits to chat
+    assert.match(result.finalText, /Thorough answer/);
+    assert.equal(memoryCalls, 1); // the full path retrieves memory
+  });
+
   it('stays on the full agent for event-sourced runs even when enabled', async () => {
     const client = new SequenceClient([
       message('end_turn', [{ type: 'text', text: 'scheduled output' }]),

@@ -12,8 +12,11 @@ import { ConsoleLogger } from '../logging/logger.js';
 import { buildLlmClient } from '../llm/factory.js';
 import { buildModelRouter } from '../llm/router.js';
 import { buildVisionExtractor } from '../llm/vision.js';
+import { buildSynthesizer } from '../llm/synthesize.js';
+import { buildImageGenerator } from '../llm/imageGen.js';
 import { createDefaultRegistry } from '../tools/index.js';
 import { SKILLS_PROMPT_NOTE } from '../skills/index.js';
+import { AGENTS_PROMPT_NOTE } from '../agents/index.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
 import { buildBrokerProvider } from '../tools/builtin/trading.js';
 import { buildGithubClient } from '../tools/builtin/github.js';
@@ -21,6 +24,7 @@ import { buildMemoryBackend } from '../memory/factory.js';
 import { buildSafetyBackend } from '../safety/factory.js';
 import { buildAutonomyBackend } from '../autonomy/factory.js';
 import { buildMcpTools } from '../mcp/factory.js';
+import { MCP_MANAGEMENT_PROMPT_NOTE } from '../mcp/tools.js';
 import { Agent } from '../agent/orchestrator.js';
 import { ApiServer } from './httpServer.js';
 import { buildVoiceProvider } from './voice.js';
@@ -28,11 +32,20 @@ import { ApiKeyAuthenticator } from './auth.js';
 import { buildNotificationStore } from '../notifications/store.js';
 import { buildTaskStore } from '../tasks/store.js';
 import { buildToolPermissionStore } from '../tools/permissions.js';
+import { ARES_CAPABILITY_PROMPT } from '../agent/capabilities.js';
 
 const SYSTEM_PROMPT = `You are ARES, a personal autonomous assistant for a single principal user, answering over a web chat UI.
 - Use the provided tools rather than guessing for anything factual, computational, or that touches the user's world.
 - State-mutating tools are gated; if one is blocked, adapt rather than retrying blindly.
 - Keep answers concise and direct.`;
+
+function buildSystemPrompt(config: ReturnType<typeof loadConfig>): string {
+  const notes: string[] = [];
+  if (config.skillsDir) notes.push(`- ${SKILLS_PROMPT_NOTE}`);
+  if (config.agentsDir) notes.push(`- ${AGENTS_PROMPT_NOTE}`);
+  notes.push(`- ${MCP_MANAGEMENT_PROMPT_NOTE}`);
+  return `${SYSTEM_PROMPT}\n\n${ARES_CAPABILITY_PROMPT}\n${notes.join('\n')}`;
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -86,9 +99,14 @@ async function main(): Promise<void> {
     model: config.fastModel,
   });
 
+  const synthesizer = buildSynthesizer(client);
+  const imageGenerator = buildImageGenerator();
+
   const registry = createDefaultRegistry({
     workspaceDir: config.workspaceDir,
     ...(searchProvider ? { searchProvider } : {}),
+    synthesizer,
+    ...(imageGenerator ? { imageGenerator } : {}),
     shell: config.shell,
     python: config.python,
     systemActionsEnabled: config.systemActionsEnabled,
@@ -99,7 +117,9 @@ async function main(): Promise<void> {
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
     taskStore: tasks,
+    mcpConfigPath: config.mcpConfigPath,
     ...(config.skillsDir ? { skills: { dir: config.skillsDir } } : {}),
+    ...(config.agentsDir ? { agents: { dir: config.agentsDir } } : {}),
     extraTools: mcp.tools,
   });
 
@@ -118,7 +138,7 @@ async function main(): Promise<void> {
     memoryWriter: memory.memoryWriter,
     logger,
     audit: memory.audit,
-    systemPrompt: config.skillsDir ? `${SYSTEM_PROMPT}\n- ${SKILLS_PROMPT_NOTE}` : SYSTEM_PROMPT,
+    systemPrompt: buildSystemPrompt(config),
     maxIterations: config.maxIterations,
     enableFastChat: config.enableFastChat,
   });

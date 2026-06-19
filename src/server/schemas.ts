@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { formatZodError } from '../tools/define.js';
 import { ASSISTANT_MODES } from '../agent/modes.js';
+import { EFFORT_LEVELS } from '../agent/effort.js';
 import { STRUCTURED_KINDS } from '../memory/types.js';
 import { TASK_PRIORITIES, TASK_STATUSES } from '../tasks/store.js';
 
@@ -18,6 +19,8 @@ export const chatSchema = z.object({
   mode: z.enum(ASSISTANT_MODES).optional(),
   /** Per-turn model choice: `auto`, `fast`/`smart`, or `<provider>:<tier>`. */
   model: z.string().max(40).optional(),
+  /** Per-turn response depth: `quick`, `standard`, or `deep`. */
+  effort: z.enum(EFFORT_LEVELS).optional(),
   /** Prior turns for multi-turn context, oldest first. Capped to keep payloads sane. */
   history: z
     .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() }))

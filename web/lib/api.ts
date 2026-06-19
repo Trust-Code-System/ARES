@@ -77,7 +77,9 @@ export async function login(key: string, remember = false): Promise<void> {
  */
 export async function ensureSession(): Promise<boolean> {
   try {
-    await api.status();
+    // Probe a protected endpoint (not /api/health, which is public) so a missing
+    // or expired session surfaces as UnauthorizedError rather than a false pass.
+    await api.killSwitch();
     return true;
   } catch (caught) {
     if (!(caught instanceof UnauthorizedError)) return true; // server down → let app's offline UI handle it
@@ -154,6 +156,10 @@ export type AssistantMode =
   | 'business'
   | 'project'
   | 'document'
+  | 'design'
+  | 'data'
+  | 'office'
+  | 'automation'
   | 'hr'
   | 'communications';
 export interface ExtractedUpload {
@@ -173,6 +179,8 @@ export interface RuntimeStatus {
   fastModel: string;
   /** Selectable model options for the HUD switch (`auto` + per-provider tiers). May be empty. */
   modelOptions?: ModelOption[];
+  /** Selectable response-depth levels for the HUD effort switch (quick/standard/deep). */
+  effortLevels?: string[];
   voiceEnabled: boolean;
   voiceInputProvider: string | null;
   voiceOutputProvider: string | null;
@@ -184,6 +192,13 @@ export interface RuntimeStatus {
   tradingEnabled: boolean;
   githubEnabled: boolean;
   connectors: string[];
+  capabilities?: Array<{
+    id: string;
+    label: string;
+    enabled: boolean;
+    detail: string;
+    strength: 'core' | 'strong' | 'medium' | 'guarded' | 'external';
+  }>;
 }
 
 export const api = {
@@ -277,6 +292,7 @@ export async function streamChat(
   options?: {
     mode?: AssistantMode;
     model?: string;
+    effort?: string;
     signal?: AbortSignal;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   },
@@ -288,6 +304,7 @@ export async function streamChat(
       text,
       ...(options?.mode ? { mode: options.mode } : {}),
       ...(options?.model ? { model: options.model } : {}),
+      ...(options?.effort && options.effort !== 'standard' ? { effort: options.effort } : {}),
       ...(options?.history?.length ? { history: options.history } : {}),
     }),
     signal: options?.signal,

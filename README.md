@@ -179,6 +179,9 @@ not the prompt. Current suite:
 | `extract_image_text` | read-only | Image/screenshot OCR via **Claude vision** (png/jpg/gif/webp). Registered only when `ANTHROPIC_API_KEY` is set; works even if the reasoning provider is OpenAI/Gemini. |
 | `web_fetch` | read-only | http(s) only, **SSRF guard** (blocks private/loopback/link-local/metadata IPs, re-checked per redirect hop), timeout + size cap, HTML→text. |
 | `web_search` | read-only | Google-grounded Gemini search or Tavily; registered when the selected provider has a key. |
+| `deep_research` | read-only | Plans sub-queries, searches, reads multiple sources, and synthesizes one **cited report**. Registered when a search provider **and** a synthesizer are available. Save the report with `write_file` for a durable artifact. |
+| `analyze_transcript` | read-only | **Record Mode** — turns a meeting/voice-note transcript into a summary, decisions, action items (owners/dates), and open questions. Follow up with `create_task`/`remember_memory`. Registered when a synthesizer is available. |
+| `generate_image` | state-mutating | **Native image generation** into the workspace jail via OpenAI Images (`gpt-image-1`) or Gemini. Gated + auditable + spend-cappable. Registered only when an image provider key is present. |
 | `notify` | state-mutating | Push to the user (terminal for now); each delivery is recorded to `notifications` history when a store is wired. |
 | `create_task` · `update_task` | state-mutating | Manage the principal's task list (durable `tasks` table). Gated like `remember_memory`. |
 | `list_tasks` | read-only | List/filter the principal's tasks. |
@@ -192,6 +195,9 @@ not the prompt. Current suite:
 | `github_search` · `github_read_file` | read-only | **Off by default.** Search repos/code/issues and read a file from a repo via the GitHub REST API. Registered when `GITHUB_TOKEN` is set. |
 | `github_create_issue` | state-mutating | **Off by default.** Open an issue in a repo; gated like every write. |
 | `find_skill` · `use_skill` | read-only | Search and load expert playbooks from the vendored skill library (see **Skills** below). Bundled scripts run only via gated `run_python`. |
+| `install_skill_repo` | state-mutating | Clone a pasted `https://github.com/owner/repo` skill pack into the managed skills area, run the static scanner, refresh the skill index, and make its `SKILL.md` playbooks available to `find_skill`/`use_skill`. Gated like every write. |
+| `list_mcp_servers` | read-only | List MCP servers installed in ARES's managed MCP config. |
+| `install_mcp_server` · `set_mcp_server_enabled` · `remove_mcp_server` | state-mutating | Register npm-based or custom stdio MCP servers in `mcp.servers.json`, enable/disable them for startup import, or remove them. Gated like every write. |
 | `calculate` · `get_current_time` | read-only | Deterministic built-ins. |
 | *MCP-imported* (Gmail, Calendar, …) | classified per tool | Imported from MCP servers; read verbs → read-only, everything else → gated. |
 
@@ -230,18 +236,24 @@ skill is a `SKILL.md` (frontmatter `name` + `description`, plus a markdown
 playbook), some with bundled Python scripts.
 
 Rather than dump the whole catalog into the system prompt, ARES uses **progressive
-disclosure** through two read-only tools ([src/skills/](src/skills)):
+disclosure** through tools in [src/skills/](src/skills):
 
 - **`find_skill(query)`** — ranked keyword search over every skill's name and
   description; returns matches as `<category>/<name>` ids.
 - **`use_skill(id)`** — loads one skill's full playbook on demand. Skills are
   keyed by `id = <category>/<name>` since some names recur across categories; a
   bare name is accepted when unambiguous, otherwise the colliding ids are listed.
+- **`install_skill_repo(url)`** — confirmation-gated installer for pasted GitHub
+  skill-pack URLs. It clones the repo into
+  `ARES_SKILLS_DIR/.installed/github/<owner>/<repo>`, indexes every `SKILL.md`,
+  runs the static scanner before activation, and refreshes the in-process cache so
+  the new skills are immediately searchable.
 
 The index is built lazily on first use and cached. Any Python scripts a skill
 bundles are surfaced as paths only — they execute **solely through the gated,
-audited `run_python` tool**, never automatically. Configure with `ARES_SKILLS_DIR`
-(default `./skills`) and `ARES_SKILLS_ENABLED` (default `true`).
+audited `run_python` tool**, never automatically. The GitHub installer clones
+files only and requires the `git` CLI on the host. Configure with
+`ARES_SKILLS_DIR` (default `./skills`) and `ARES_SKILLS_ENABLED` (default `true`).
 
 **Skill metadata.** A skill may carry an optional `metadata.json` next to its
 `SKILL.md` ([loader.ts](src/skills/loader.ts), `readMetadata`): `id`, `category`,
@@ -287,8 +299,12 @@ exactly like `write_file`. The read-only/state-mutating split is decided by a
 read verbs (`list`, `get`, `search`, …) run ungated; recognized write verbs *and
 anything unrecognized* are gated. Per-tool `classifyOverrides` cover exceptions.
 
-Configure servers with `ARES_MCP_SERVERS` (a JSON array). Each entry is launched
-as a subprocess; one failing to connect is logged and skipped, never fatal:
+Configure servers manually with `ARES_MCP_SERVERS` (a JSON array), or let ARES
+register them with the gated `install_mcp_server` tool. The installer writes to
+`ARES_MCP_CONFIG_PATH` (default `./mcp.servers.json`) and keeps newly installed
+servers disabled by default unless `enabled: true` is requested. Enabled managed
+servers are merged with `ARES_MCP_SERVERS` on startup. Each entry is launched as a
+subprocess; one failing to connect is logged and skipped, never fatal:
 
 ```json
 [
@@ -301,6 +317,15 @@ as a subprocess; one failing to connect is logged and skipped, never fatal:
   }
 ]
 ```
+
+Example install prompt:
+
+> Install the filesystem MCP from npm package
+> `@modelcontextprotocol/server-filesystem` with package arg `C:\Users\Admin\Desktop`.
+
+ARES should call `install_mcp_server`, then `set_mcp_server_enabled` if you want it
+active. Restart ARES after enabling so the server can be spawned and its tools
+imported into the registry.
 
 Imported tool names are namespaced (`gmail_send_email`) and sent to the model in
 non-strict schema mode (upstream MCP schemas aren't authored for strict mode).
@@ -549,7 +574,7 @@ npm run typecheck         # tsc --noEmit
 | `ARES_GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Gemini embedding model (when the Gemini embedder is selected). Output truncated to `ARES_EMBEDDING_DIM`. |
 | `ARES_EMBEDDING_DIM`      | `1024`              | Embedding dimension. **Must match the `vector(N)` column in the migration.** |
 | `ARES_WORKSPACE_DIR`      | `./workspace`       | Sandbox the file tools are jailed to.                       |
-| `ARES_SKILLS_DIR`         | `./skills`          | Vendored expert skill library backing `find_skill`/`use_skill`. |
+| `ARES_SKILLS_DIR`         | `./skills`          | Vendored expert skill library backing `find_skill`/`use_skill`; GitHub-installed packs live under `.installed/github/`. |
 | `ARES_SKILLS_ENABLED`     | `true`              | Set `false` to disable the skill library (the skill tools aren't registered). |
 | `ARES_REMOTION_ENABLED`   | `false`             | Set `true` to register the gated `remotion_video_generator` tool. Mind Remotion's commercial license (free for individuals/non-profits/≤3-employee orgs; paid otherwise). |
 | `TAVILY_API_KEY`          | — (optional)        | Enables `web_search`. Unset → the tool isn't registered.    |
@@ -557,6 +582,7 @@ npm run typecheck         # tsc --noEmit
 | `GITHUB_API_URL`          | `https://api.github.com` | GitHub REST base URL; override for GitHub Enterprise Server. |
 | `REDIS_URL`               | — (optional)        | Redis for the BullMQ scheduler **and** the durable memory ingestion queue. Unset → in-memory scheduler + in-process queue (no persistence). |
 | `ARES_MCP_SERVERS`        | — (optional)        | JSON array of stdio MCP servers to import tools from (see below). Unset → none. |
+| `ARES_MCP_CONFIG_PATH`    | `./mcp.servers.json` | Managed MCP config written by `install_mcp_server`; enabled entries are imported on startup. |
 | `ARES_WEBHOOK_SECRET`     | — (optional)        | Shared secret enabling the daemon's webhook trigger endpoint. Unset → webhooks off. |
 | `ARES_WEBHOOK_PORT`       | `8787`              | Port the webhook server listens on (daemon only). |
 | `ARES_SPEND_PER_ACTION_LIMIT` | — (optional)    | Max cost of a single tool call. Unset → not enforced. |
@@ -582,6 +608,14 @@ npm run typecheck         # tsc --noEmit
 | `ARES_VOICE_TTS_VOICE`    | `alloy`             | TTS voice name. |
 | `ARES_VOICE_TTS_FORMAT`   | `mp3`               | TTS audio container (mp3/opus/aac/flac/wav/pcm). |
 | `OPENAI_BASE_URL`         | `https://api.openai.com/v1` | Override the OpenAI base URL (compatible gateways). |
+| `ARES_IMAGE_PROVIDER`     | `auto`              | Native image generation backend: `auto` (OpenAI→Gemini) · `openai` · `gemini`. No key for the chosen provider → `generate_image` is not registered. |
+| `ARES_IMAGE_MODEL`        | provider default    | Image model id (e.g. `gpt-image-1`, `gemini-2.5-flash-image`). |
+
+> **Per-turn knobs (no env needed).** Each chat turn accepts an optional
+> `effort` of `quick` · `standard` · `deep` (depth/thoroughness, orthogonal to
+> the `model` switch). `quick` biases the fast tier and a tight tool budget;
+> `deep` forces the full agent on the reasoning tier and asks for thorough,
+> verified work. `/api/status` advertises the available `effortLevels`.
 
 ## Adding a new tool
 

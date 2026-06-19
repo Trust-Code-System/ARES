@@ -17,6 +17,8 @@ import { ConsoleLogger } from './logging/logger.js';
 import { buildLlmClient } from './llm/factory.js';
 import { buildModelRouter } from './llm/router.js';
 import { buildVisionExtractor } from './llm/vision.js';
+import { buildSynthesizer } from './llm/synthesize.js';
+import { buildImageGenerator } from './llm/imageGen.js';
 import { createDefaultRegistry } from './tools/index.js';
 import { SKILLS_PROMPT_NOTE } from './skills/index.js';
 import { AGENTS_PROMPT_NOTE } from './agents/index.js';
@@ -28,10 +30,12 @@ import { buildGithubClient } from './tools/builtin/github.js';
 import { buildMemoryBackend } from './memory/factory.js';
 import { buildSafetyBackend } from './safety/factory.js';
 import { buildMcpTools } from './mcp/factory.js';
+import { MCP_MANAGEMENT_PROMPT_NOTE } from './mcp/tools.js';
 import { buildNotificationStore } from './notifications/store.js';
 import { buildTaskStore } from './tasks/store.js';
 import { buildToolPermissionStore } from './tools/permissions.js';
 import { Agent } from './agent/orchestrator.js';
+import { ARES_CAPABILITY_PROMPT } from './agent/capabilities.js';
 import type { ConfirmationPrompt } from './tools/confirmation.js';
 
 const SYSTEM_PROMPT = `You are ARES, a personal autonomous assistant for a single principal user.
@@ -49,7 +53,9 @@ function buildSystemPrompt(config: ReturnType<typeof loadConfig>): string {
   const notes: string[] = [];
   if (config.skillsDir) notes.push(`- ${SKILLS_PROMPT_NOTE}`);
   if (config.agentsDir) notes.push(`- ${AGENTS_PROMPT_NOTE}`);
-  return notes.length ? `${SYSTEM_PROMPT}\n${notes.join('\n')}` : SYSTEM_PROMPT;
+  notes.push(`- ${MCP_MANAGEMENT_PROMPT_NOTE}`);
+  const base = `${SYSTEM_PROMPT}\n\n${ARES_CAPABILITY_PROMPT}`;
+  return notes.length ? `${base}\n${notes.join('\n')}` : base;
 }
 
 async function main(): Promise<void> {
@@ -108,9 +114,17 @@ async function main(): Promise<void> {
   });
   if (!visionExtractor) logger.warn('No ANTHROPIC_API_KEY — extract_image_text (image OCR) is disabled.');
 
+  // Single-shot synthesizer (deep_research, analyze_transcript) over the main client.
+  const synthesizer = buildSynthesizer(client);
+  // Native image generation (generate_image) when an image provider key is present.
+  const imageGenerator = buildImageGenerator();
+  if (!imageGenerator) logger.warn('No image provider key — generate_image is disabled.');
+
   const registry = createDefaultRegistry({
     workspaceDir: config.workspaceDir,
     ...(searchProvider ? { searchProvider } : {}),
+    synthesizer,
+    ...(imageGenerator ? { imageGenerator } : {}),
     shell: config.shell,
     python: config.python,
     systemActionsEnabled: config.systemActionsEnabled,
@@ -121,6 +135,7 @@ async function main(): Promise<void> {
     ...(visionExtractor ? { visionExtractor } : {}),
     notificationStore: notifications,
     taskStore: tasks,
+    mcpConfigPath: config.mcpConfigPath,
     ...(config.skillsDir ? { skills: { dir: config.skillsDir, usageStore: skillUsage } } : {}),
     ...(config.agentsDir
       ? { agents: { dir: config.agentsDir, usageStore: skillUsage, availableProviders } }

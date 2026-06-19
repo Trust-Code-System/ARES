@@ -31,17 +31,19 @@ services:
     env_file:
       - .env
     environment:
-      # Bind publicly inside the container (Caddy proxies to it); guarded by ARES_API_KEY.
+      # Bind publicly inside the container; guarded by ARES_API_KEY.
       ARES_API_HOST: 0.0.0.0
       ARES_API_PORT: "3001"
-      # Browser origin allowed by CORS = the web UI's public URL.
-      ARES_API_ORIGINS: "https://${ARES_DOMAIN}"
+      # Browser origin allowed by CORS = localhost for development.
+      ARES_API_ORIGINS: "http://localhost:3002"
       # Durable scheduler + memory queue via the Redis-compatible Dragonfly.
       REDIS_URL: "redis://dragonfly:6379"
       # Container-local workspace (overrides any host path baked into .env).
       ARES_WORKSPACE_DIR: /data/workspace
     volumes:
       - ares-workspace:/data/workspace
+    ports:
+      - "3001:3001"
     depends_on:
       - dragonfly
     healthcheck:
@@ -58,29 +60,13 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        # Inlined at build time — the public API URL as the browser sees it.
-        NEXT_PUBLIC_ARES_API: "https://api.${ARES_DOMAIN}"
+        # Inlined at build time — the public API URL as the browser sees it (localhost for dev).
+        NEXT_PUBLIC_ARES_API: "http://localhost:3001"
     restart: unless-stopped
     depends_on:
       - api
-    networks:
-      - ares
-
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      ARES_DOMAIN: "${ARES_DOMAIN}"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - web
-      - api
+      - "3002:3002"
     networks:
       - ares
 

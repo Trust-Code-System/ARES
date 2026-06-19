@@ -23,6 +23,8 @@ import type { NotificationStore } from '../notifications/store.js';
 import { TASK_STATUSES, type TaskStatus, type TaskStore } from '../tasks/store.js';
 import type { VisionExtractor } from '../llm/vision.js';
 import type { VoiceProvider } from './voice.js';
+import { CAPABILITY_BLUEPRINT, type CapabilityId, type RuntimeCapability } from '../agent/capabilities.js';
+import { EFFORT_LEVELS } from '../agent/effort.js';
 import {
   chatSchema,
   confirmationSchema,
@@ -33,6 +35,7 @@ import {
   toggleToolSchema,
   updateTaskSchema,
 } from './schemas.js';
+import { containsSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export interface AgentLike {
   run(
@@ -82,6 +85,7 @@ export interface ApiDeps {
     tradingEnabled: boolean;
     githubEnabled?: boolean;
     connectors: string[];
+    capabilities?: RuntimeCapability[];
   };
 }
 
@@ -119,6 +123,7 @@ export class ApiHandler {
         model: this.deps.runtime?.model ?? 'unknown',
         fastModel: this.deps.runtime?.fastModel ?? 'unknown',
         modelOptions: this.deps.runtime?.modelOptions ?? [],
+        effortLevels: EFFORT_LEVELS,
         voiceEnabled: this.deps.runtime?.voiceEnabled ?? Boolean(this.deps.voice),
         voiceInputProvider: this.deps.runtime?.voiceInputProvider ?? this.deps.voice?.sttProvider ?? null,
         voiceOutputProvider: this.deps.runtime?.voiceOutputProvider ?? this.deps.voice?.ttsProvider ?? null,
@@ -130,6 +135,7 @@ export class ApiHandler {
         tradingEnabled: this.deps.runtime?.tradingEnabled ?? this.deps.registry.has('place_trade'),
         githubEnabled: this.deps.runtime?.githubEnabled ?? this.deps.registry.has('github_search'),
         connectors: this.deps.runtime?.connectors ?? [],
+        capabilities: this.deps.runtime?.capabilities ?? this.capabilityStatus(),
       });
     }
 
@@ -146,7 +152,7 @@ export class ApiHandler {
     if (method === 'GET' && path === '/api/memory') {
       const q = req.query.get('q');
       const facts = q
-        ? await this.deps.structured.search(q, limit(req, 50))
+        ? await this.deps.structured.search(redactSensitiveText(q), limit(req, 50))
         : await this.deps.structured.all();
       return ok({ facts });
     }
@@ -203,6 +209,8 @@ export class ApiHandler {
       source: 'user',
       ...(parsed.data.mode ? { mode: parsed.data.mode } : {}),
       ...(parsed.data.model ? { model: parsed.data.model } : {}),
+      ...(parsed.data.effort ? { effort: parsed.data.effort } : {}),
+      ...(parsed.data.history ? { history: parsed.data.history } : {}),
     });
     return ok({
       runId: result.runId,
@@ -210,6 +218,28 @@ export class ApiHandler {
       stopReason: result.stopReason,
       toolCalls: result.toolCalls,
       events: this.deps.audit.forRun(result.runId),
+    });
+  }
+
+  private capabilityStatus(): RuntimeCapability[] {
+    const has = (name: string): boolean => this.deps.registry.has(name);
+    const runtime = this.deps.runtime;
+    const connectors = runtime?.connectors ?? [];
+    const persistent = runtime?.persistentMemory ?? false;
+
+    return CAPABILITY_BLUEPRINT.map((item) => {
+      const state = capabilityState(item.id, {
+        has,
+        persistent,
+        webSearch: runtime?.webSearchEnabled ?? has('web_search'),
+        voice: runtime?.voiceEnabled ?? Boolean(this.deps.voice),
+        shell: runtime?.shellEnabled ?? has('run_command'),
+        python: runtime?.pythonEnabled ?? has('run_python'),
+        systemActions: runtime?.systemActionsEnabled ?? has('open_application'),
+        github: runtime?.githubEnabled ?? has('github_search'),
+        connectors,
+      });
+      return { id: item.id, label: item.label, strength: item.strength, ...state };
     });
   }
 
@@ -225,7 +255,8 @@ export class ApiHandler {
     if (!this.deps.semantic || !this.deps.embeddings) {
       return ok({ hits: [], note: 'semantic memory is not configured on this server' });
     }
-    const [embedding] = await this.deps.embeddings.embed([q], 'query');
+    const safeQuery = redactSensitiveText(q);
+    const [embedding] = await this.deps.embeddings.embed([safeQuery], 'query');
     const hits = await this.deps.semantic.search(embedding ?? [], limit(req, 10));
     return ok({ hits });
   }
@@ -233,6 +264,15 @@ export class ApiHandler {
   private async remember(body: unknown): Promise<ApiResponse> {
     const parsed = parseBody(rememberSchema, body);
     if (!parsed.ok) return badRequest(parsed.error);
+    if (containsSensitiveData(parsed.data)) {
+      return {
+        status: 400,
+        body: {
+          error:
+            'ARES does not store passwords, OTPs, PINs, private keys, seed phrases, CVV values, session cookies, or authentication secrets.',
+        },
+      };
+    }
     const fact = await this.deps.structured.upsert({
       kind: parsed.data.kind,
       subject: parsed.data.subject.trim(),
@@ -354,4 +394,143 @@ function badRequest(error: string): ApiResponse {
 function limit(req: ApiRequest, fallback: number): number {
   const raw = Number(req.query.get('limit'));
   return Number.isSafeInteger(raw) && raw > 0 ? raw : fallback;
+}
+
+interface CapabilityInputs {
+  has(name: string): boolean;
+  persistent: boolean;
+  webSearch: boolean;
+  voice: boolean;
+  shell: boolean;
+  python: boolean;
+  systemActions: boolean;
+  github: boolean;
+  connectors: string[];
+}
+
+function capabilityState(
+  id: CapabilityId,
+  input: CapabilityInputs,
+): Pick<RuntimeCapability, 'enabled' | 'detail'> {
+  switch (id) {
+    case 'reasoning':
+      return { enabled: true, detail: 'Agent loop, model routing, tools, and verification checklist' };
+    case 'coding':
+      return {
+        enabled: input.has('read_file') && input.has('write_file'),
+        detail:
+          `${input.shell ? 'shell' : 'no shell'}, ${input.github ? 'GitHub tools' : 'no GitHub tools'}, workspace file tools`,
+      };
+    case 'documents':
+      return {
+        enabled: input.has('read_pdf') && input.has('read_docx') && input.has('read_spreadsheet'),
+        detail: input.has('extract_image_text') ? 'PDF, Word, spreadsheet, and image OCR' : 'PDF, Word, and spreadsheet extraction',
+      };
+    case 'long_context_memory':
+      return {
+        enabled: true,
+        detail: input.persistent ? 'Chat history + persistent semantic memory' : 'Chat history + ephemeral memory',
+      };
+    case 'connectors_mcp':
+      return {
+        enabled: input.connectors.length > 0 || input.has('list_mcp_servers'),
+        detail: input.connectors.length ? input.connectors.join(', ') : 'MCP management available; no active connector imported',
+      };
+    case 'research':
+      return {
+        enabled: input.webSearch && input.has('web_fetch'),
+        detail: input.webSearch ? 'Search + guarded page retrieval' : 'web_search provider not configured',
+      };
+    case 'deep_research':
+      return {
+        enabled: input.has('deep_research'),
+        detail: input.has('deep_research')
+          ? 'Multi-source fan-out with cited report synthesis'
+          : 'needs a search provider and a synthesizer',
+      };
+    case 'web_verification':
+      return {
+        enabled: input.has('web_fetch'),
+        detail: input.webSearch ? 'Current search plus fetch' : 'Fetch available; search provider not configured',
+      };
+    case 'output_workspace':
+      return {
+        enabled: input.has('write_file'),
+        detail: 'Workspace file output for reusable reports, code, and documents',
+      };
+    case 'skills':
+      return {
+        enabled: input.has('find_skill') && input.has('use_skill'),
+        detail: input.has('find_skill') ? 'Skill search and progressive loading' : 'skill library disabled',
+      };
+    case 'file_engine':
+      return {
+        enabled: input.has('read_file') && input.has('write_file'),
+        detail: 'Jailed read/write/list plus document extractors',
+      };
+    case 'computer_mode':
+      return {
+        enabled: input.systemActions,
+        detail: input.systemActions ? 'Approved app and URL launch tools' : 'system actions disabled',
+      };
+    case 'ui_design':
+      return {
+        enabled: true,
+        detail: 'Design mode, frontend specialist agents, and UI verification guidance',
+      };
+    case 'data_analysis':
+      return {
+        enabled: input.has('calculate') || input.python || input.has('read_spreadsheet'),
+        detail: `${input.python ? 'Python runner' : 'calculator'} + spreadsheet extraction`,
+      };
+    case 'office_work':
+      return {
+        enabled: input.has('read_docx') && input.has('write_file'),
+        detail: 'Reports, policies, letters, slide briefs, tables, and spreadsheet-ready output',
+      };
+    case 'memory':
+      return {
+        enabled: input.has('remember_memory') || input.persistent,
+        detail: input.persistent ? 'Structured + semantic persistent memory' : 'structured in-memory facts',
+      };
+    case 'meeting_intelligence':
+      return {
+        enabled: input.has('analyze_transcript'),
+        detail: input.has('analyze_transcript')
+          ? 'Transcript → summary, decisions, action items, open questions'
+          : 'needs a synthesizer',
+      };
+    case 'image_generation_boundary':
+      return {
+        enabled: input.has('generate_image'),
+        detail: input.has('generate_image')
+          ? 'Native image generation into the workspace (gated)'
+          : 'Prompt/design direction; native photo generation not configured',
+      };
+    case 'effort_control':
+      return {
+        enabled: true,
+        detail: 'Per-turn quick / standard / deep response depth',
+      };
+    case 'hallucination_control':
+      return {
+        enabled: true,
+        detail: 'Source/date checking guidance and insufficient-evidence response mode',
+      };
+    case 'autonomy_permissions':
+      return {
+        enabled: true,
+        detail: 'Confirmation gate, standing rules, kill switch, and approval queue',
+      };
+    case 'audit_log':
+      return {
+        enabled: true,
+        detail: 'Run, model, tool, gate, error, and completion events',
+      };
+    case 'project_workspaces':
+      return {
+        enabled: true,
+        detail: input.persistent ? 'Project memories can persist across runs' : 'Project mode active; persistence not configured',
+      };
+  }
 }

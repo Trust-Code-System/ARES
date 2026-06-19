@@ -19,6 +19,7 @@ import type {
   ToolChoiceFunction,
 } from 'openai/resources/responses/responses';
 import type { CreateMessageParams, ModelTier } from './anthropic.js';
+import { redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export interface OpenAIResponsesClientOptions {
   apiKey: string;
@@ -55,8 +56,8 @@ export class OpenAIResponsesClient {
     const tier = params.tier ?? 'reasoning';
     const body: ResponseCreateParamsNonStreaming = {
       model: this.models[tier],
-      instructions: params.system,
-      input: this.toOpenAIInput(params.messages),
+      instructions: redactSensitiveText(params.system),
+      input: this.toOpenAIInput(redactSensitiveData(params.messages)),
       tools: params.tools.map(toOpenAITool),
       tool_choice: toOpenAIToolChoice(params.toolChoice),
       max_output_tokens: params.maxTokens ?? 16000,

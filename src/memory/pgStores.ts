@@ -19,6 +19,7 @@ import type {
   StructuredKind,
 } from './types.js';
 import { dedupeKey } from './types.js';
+import { containsSensitiveData, redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export class PgSemanticStore implements SemanticStore {
   constructor(private readonly db: Db) {}
@@ -26,15 +27,16 @@ export class PgSemanticStore implements SemanticStore {
   async add(chunks: NewMemoryChunk[], embeddings: number[][]): Promise<void> {
     for (let i = 0; i < chunks.length; i++) {
       const c = chunks[i]!;
+      const safeContent = redactSensitiveText(c.content);
       await this.db.query(
         `insert into semantic_memory (source_type, source_ref, content, embedding, metadata, importance)
          values ($1, $2, $3, $4, $5, $6)`,
         [
           c.sourceType,
           c.sourceRef ?? null,
-          c.content,
+          safeContent,
           toVectorLiteral(embeddings[i] ?? []),
-          JSON.stringify(c.metadata ?? {}),
+          JSON.stringify(redactSensitiveData(c.metadata ?? {})),
           c.importance ?? 0.5,
         ],
       );
@@ -70,8 +72,8 @@ export class PgSemanticStore implements SemanticStore {
       id: r.id,
       sourceType: r.source_type,
       sourceRef: r.source_ref,
-      content: r.content,
-      metadata: r.metadata ?? {},
+      content: redactSensitiveText(r.content),
+      metadata: redactSensitiveData(r.metadata ?? {}),
       importance: r.importance,
       createdAt: new Date(r.created_at).toISOString(),
       similarity: r.similarity,
@@ -83,6 +85,9 @@ export class PgStructuredStore implements StructuredStore {
   constructor(private readonly db: Db) {}
 
   async upsert(fact: NewStructuredFact): Promise<StructuredFact> {
+    if (containsSensitiveData(fact)) {
+      throw new Error('Refusing to store sensitive authentication data in memory.');
+    }
     const key = dedupeKey(fact.kind, fact.subject, fact.content);
     const res = await this.db.query<StructuredRow>(
       `insert into structured_memory
@@ -98,8 +103,8 @@ export class PgStructuredStore implements StructuredStore {
       [
         fact.kind,
         fact.subject,
-        fact.content,
-        JSON.stringify(fact.attributes ?? {}),
+        redactSensitiveText(fact.content),
+        JSON.stringify(redactSensitiveData(fact.attributes ?? {})),
         fact.confidence ?? 1,
         fact.importance ?? 0.5,
         fact.sourceRun ?? null,
@@ -161,8 +166,8 @@ function rowToFact(r: StructuredRow): StructuredFact {
     id: r.id,
     kind: r.kind,
     subject: r.subject,
-    content: r.content,
-    attributes: r.attributes ?? {},
+    content: redactSensitiveText(r.content),
+    attributes: redactSensitiveData(r.attributes ?? {}),
     confidence: r.confidence,
     importance: r.importance,
     sourceRun: r.source_run,

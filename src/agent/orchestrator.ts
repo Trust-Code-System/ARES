@@ -33,7 +33,9 @@ import type { ModelRouter } from '../llm/router.js';
 import { parseModelChoice, type ParsedModelChoice } from '../llm/modelChoice.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { formatZodError } from '../tools/define.js';
+import { containsSensitiveData, redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 import { modeInstruction } from './modes.js';
+import { parseEffort, effortProfile } from './effort.js';
 
 export interface MessageClient {
   createMessage(params: CreateMessageParams): Promise<Anthropic.Message>;
@@ -122,8 +124,8 @@ export class Agent {
       await writer.ingest({
         runId: result.runId,
         source: input.source,
-        userText: input.text,
-        assistantText: result.finalText,
+        userText: redactSensitiveText(input.text),
+        assistantText: redactSensitiveText(result.finalText),
       });
     } catch (err) {
       this.opts.logger.error('memory writer threw', {
@@ -141,12 +143,13 @@ export class Agent {
     const runId = randomUUID();
     const { logger } = this.opts;
     const toolCalls: AgentRunResult['toolCalls'] = [];
+    const modelInput = sanitizeAgentInput(input);
 
     this.record({
       runId,
       ts: new Date().toISOString(),
       type: 'run_started',
-      detail: { source: input.source, text: input.text, mode: input.mode ?? 'general' },
+      detail: { source: modelInput.source, text: modelInput.text, mode: modelInput.mode ?? 'general' },
     }, events);
     logger.info('run started', { runId, source: input.source });
 
@@ -163,6 +166,8 @@ export class Agent {
       // 0. Decide which model handles this run. An explicit `model` choice forces a
       //    provider/tier; `auto` classifies the turn — answering pure chat on the
       //    fast path and picking the task tier (fast vs reasoning) by complexity.
+      //    Effort (quick/standard/deep) is an orthogonal depth knob applied on top.
+      const profile = effortProfile(parseEffort(input.effort));
       const selection = parseModelChoice(input.model);
       let loopClient: MessageClient = this.opts.client;
       let loopTier: ModelTier = 'reasoning';
@@ -171,22 +176,31 @@ export class Agent {
         loopClient = resolved.client;
         loopTier = resolved.tier;
       } else {
-        const verdict = await this.routeTurn(input, signal);
-        if (verdict === 'chat') return this.fastChatReply(input, runId, signal, events);
+        // Deep effort always works the full agent — never the chat fast-path.
+        const verdict = profile.forceFullAgent ? 'complex' : await this.routeTurn(modelInput, signal);
+        if (verdict === 'chat') return this.fastChatReply(modelInput, runId, signal, events);
         if (verdict === 'simple') loopTier = 'fast';
+        // Effort biases the tier on top of the auto classification.
+        if (profile.tierBias) loopTier = profile.tierBias;
       }
 
+      // Effort can tighten the tool-round-trip budget for the turn.
+      const maxIterations = profile.maxIterationsCap
+        ? Math.min(this.opts.maxIterations, profile.maxIterationsCap)
+        : this.opts.maxIterations;
+
       // 1. Retrieve relevant memory and fold it into the system prompt.
-      const memoryContext = await this.opts.memory.retrieve(input.text, runId);
-      const baseSystem = `${this.opts.systemPrompt}\n\n## Active mode\n${modeInstruction(input.mode)}`;
+      const memoryContext = redactSensitiveText(await this.opts.memory.retrieve(modelInput.text, runId));
+      let baseSystem = `${redactSensitiveText(this.opts.systemPrompt)}\n\n## Active mode\n${modeInstruction(input.mode)}`;
+      if (profile.instruction) baseSystem += `\n\n## Effort\n${profile.instruction}`;
       const system = memoryContext
         ? `${baseSystem}\n\n## Relevant memory\n${memoryContext}`
         : baseSystem;
 
       const tools = this.opts.registry.toAnthropicTools();
-      const messages: Anthropic.MessageParam[] = buildInitialMessages(input);
+      const messages: Anthropic.MessageParam[] = buildInitialMessages(modelInput);
 
-      for (let i = 0; i < this.opts.maxIterations; i++) {
+      for (let i = 0; i < maxIterations; i++) {
         if (signal?.aborted) {
           return this.finish(runId, finalText, 'aborted', iterations, toolCalls, events);
         }
@@ -198,8 +212,9 @@ export class Agent {
           tools,
           tier: loopTier,
           ...(signal ? { signal } : {}),
-          ...(events?.onText ? { onText: events.onText } : {}),
+          ...(events?.onText ? { onText: (delta: string) => events.onText!(redactSensitiveText(delta)) } : {}),
         });
+        const responseContent = sanitizeContentBlocks(response.content);
 
         this.record({
           runId,
@@ -208,14 +223,14 @@ export class Agent {
           detail: {
             stopReason: response.stop_reason,
             usage: response.usage,
-            blocks: response.content.map((b) => b.type),
+            blocks: responseContent.map((b) => b.type),
           },
         }, events);
 
         // Preserve the assistant turn verbatim (thinking + tool_use blocks).
-        messages.push({ role: 'assistant', content: response.content });
+        messages.push({ role: 'assistant', content: responseContent });
 
-        finalText = extractText(response.content) || finalText;
+        finalText = extractText(responseContent) || finalText;
 
         if (response.stop_reason === 'refusal') {
           this.record({
@@ -228,7 +243,7 @@ export class Agent {
           return this.finish(runId, finalText, 'refusal', iterations, toolCalls, events);
         }
 
-        const toolUses = response.content.filter(
+        const toolUses = responseContent.filter(
           (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
         );
 
@@ -248,7 +263,7 @@ export class Agent {
         messages.push({ role: 'user', content: results });
       }
 
-      logger.warn('hit max iterations', { runId, max: this.opts.maxIterations });
+      logger.warn('hit max iterations', { runId, max: maxIterations });
       return this.finish(runId, finalText, 'max_iterations', iterations, toolCalls, events);
     } catch (err) {
       if (isAbortError(err, signal)) {
@@ -280,12 +295,13 @@ export class Agent {
     const { logger } = this.opts;
     const runId = ctx.runId;
     const tool = this.opts.registry.get(use.name);
+    const safeInput = redactSensitiveData(use.input);
 
     this.record({
       runId,
       ts: new Date().toISOString(),
       type: 'tool_requested',
-      detail: { tool: use.name, input: use.input },
+      detail: { tool: use.name, input: safeInput },
     }, events);
 
     if (!tool || !this.opts.registry.isEnabled(use.name)) {
@@ -299,6 +315,19 @@ export class Agent {
       return this.errorResult(
         use.id,
         tool ? `Tool "${use.name}" is disabled.` : `Unknown tool "${use.name}".`,
+      );
+    }
+
+    if (containsSensitiveData(use.input)) {
+      this.record({
+        runId,
+        ts: new Date().toISOString(),
+        type: 'tool_failed',
+        detail: { tool: use.name, error: 'sensitive input blocked' },
+      }, events);
+      return this.errorResult(
+        use.id,
+        'Sensitive authentication data must be entered manually by the user and cannot be passed to tools, memory, logs, or models.',
       );
     }
 
@@ -339,7 +368,7 @@ export class Agent {
     if (tool.kind === 'state_mutating') {
       const decision = await this.opts.gate.requestApproval({
         tool,
-        input: use.input,
+        input: safeInput,
         runId,
       });
       this.record({
@@ -359,11 +388,13 @@ export class Agent {
 
     try {
       const result = await tool.execute(toolInput as Record<string, unknown>, ctx);
+      const safeContent = redactSensitiveText(result.content);
+      const safeData = redactSensitiveData(result.data ?? null);
       this.record({
         runId,
         ts: new Date().toISOString(),
         type: result.ok ? 'tool_executed' : 'tool_failed',
-        detail: { tool: use.name, ok: result.ok, data: result.data ?? null },
+        detail: { tool: use.name, ok: result.ok, data: safeData },
       }, events);
       logger.info('tool executed', { tool: use.name, ok: result.ok });
       return {
@@ -371,7 +402,7 @@ export class Agent {
         block: {
           type: 'tool_result',
           tool_use_id: use.id,
-          content: result.content,
+          content: safeContent,
           is_error: !result.ok,
         },
       };
@@ -448,7 +479,7 @@ export class Agent {
     signal: AbortSignal | undefined,
     events?: AgentEventHandlers,
   ): Promise<AgentRunResult> {
-    const system = `${this.opts.systemPrompt}\n\n## Conversational mode\n${CONVERSATIONAL_INSTRUCTION}`;
+    const system = `${redactSensitiveText(this.opts.systemPrompt)}\n\n## Conversational mode\n${CONVERSATIONAL_INSTRUCTION}`;
     const response = await this.opts.client.createMessage({
       system,
       messages: buildInitialMessages(input),
@@ -456,7 +487,7 @@ export class Agent {
       tier: 'fast',
       maxTokens: 600,
       ...(signal ? { signal } : {}),
-      ...(events?.onText ? { onText: events.onText } : {}),
+      ...(events?.onText ? { onText: (delta: string) => events.onText!(redactSensitiveText(delta)) } : {}),
     });
 
     this.record({
@@ -467,7 +498,7 @@ export class Agent {
     }, events);
     this.opts.logger.info('fast chat reply', { runId });
 
-    return { ...this.finish(runId, extractText(response.content), 'completed', 1, [], events), fastChat: true };
+    return { ...this.finish(runId, extractText(sanitizeContentBlocks(response.content)), 'completed', 1, [], events), fastChat: true };
   }
 
   /** One fast-tier classification call. Ambiguous/empty/legacy → 'complex' (fail-safe). */
@@ -477,7 +508,7 @@ export class Agent {
   ): Promise<'chat' | 'simple' | 'complex'> {
     const response = await this.opts.client.createMessage({
       system: ROUTER_INSTRUCTION,
-      messages: [{ role: 'user', content: input.text }],
+      messages: [{ role: 'user', content: redactSensitiveText(input.text) }],
       tools: [],
       tier: 'fast',
       maxTokens: 16,
@@ -503,7 +534,7 @@ export class Agent {
       type: 'run_finished',
       detail: { stopReason, iterations, toolCalls },
     }, events);
-    return { runId, finalText, stopReason, iterations, toolCalls };
+    return { runId, finalText: redactSensitiveText(finalText), stopReason, iterations, toolCalls };
   }
 
   private record(event: AuditEvent, events?: AgentEventHandlers): void {
@@ -574,10 +605,29 @@ function buildInitialMessages(input: AgentInput): Anthropic.MessageParam[] {
     if (last && last.role === role) last.content += `\n\n${content}`;
     else turns.push({ role, content });
   };
-  for (const turn of input.history ?? []) push(turn.role, turn.content);
-  push('user', input.text);
+  for (const turn of input.history ?? []) push(turn.role, redactSensitiveText(turn.content));
+  push('user', redactSensitiveText(input.text));
   while (turns.length > 0 && turns[0]!.role !== 'user') turns.shift();
   return turns.map((turn) => ({ role: turn.role, content: turn.content }));
+}
+
+function sanitizeAgentInput(input: AgentInput): AgentInput {
+  return {
+    ...input,
+    text: redactSensitiveText(input.text),
+    ...(input.history
+      ? {
+          history: input.history.map((turn) => ({
+            role: turn.role,
+            content: redactSensitiveText(turn.content),
+          })),
+        }
+      : {}),
+  };
+}
+
+function sanitizeContentBlocks(content: Anthropic.ContentBlock[]): Anthropic.ContentBlock[] {
+  return redactSensitiveData(structuredClone(content));
 }
 
 /** Validate the model's args against the tool's declared `required` list. */

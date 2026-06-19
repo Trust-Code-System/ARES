@@ -7,6 +7,7 @@ import type { ToolKind } from './types.js';
 import { DEFAULT_COST_FIELDS, DEFAULT_TRADE_MARKERS, type SpendConfig } from './safety/caps.js';
 import { DEFAULT_SHELL_ALLOWLIST } from './tools/builtin/shell.js';
 import type { BrokerConfig } from './tools/builtin/trading.js';
+import { activeMcpServers } from './mcp/configStore.js';
 
 /** Sandboxed shell tool config. Disabled by default (high-risk). */
 export interface ShellConfig {
@@ -82,6 +83,8 @@ export interface Config {
   redisUrl?: string;
   /** MCP servers (Gmail/Calendar/…) to connect to and import tools from. */
   mcpServers: McpServerConfig[];
+  /** Managed MCP server config file used by the install/list/enable tools. */
+  mcpConfigPath: string;
   /** Shared secret for the webhook trigger endpoint. Absent → webhooks disabled. */
   webhookSecret?: string;
   /** Port for the webhook server (daemon only). */
@@ -210,7 +213,8 @@ export function loadConfig(): Config {
     githubToken: process.env.GITHUB_TOKEN || undefined,
     githubApiBaseUrl: process.env.GITHUB_API_URL || undefined,
     redisUrl: process.env.REDIS_URL || undefined,
-    mcpServers: parseMcpServers(process.env.ARES_MCP_SERVERS),
+    mcpConfigPath: parseMcpConfigPath(),
+    mcpServers: parseAllMcpServers(),
     webhookSecret: process.env.ARES_WEBHOOK_SECRET || undefined,
     webhookPort,
     spend: parseSpendConfig(),
@@ -246,6 +250,10 @@ export function parseSkillsDir(): string {
     return '';
   }
   return path.resolve(process.env.ARES_SKILLS_DIR ?? './skills');
+}
+
+export function parseMcpConfigPath(): string {
+  return path.resolve(process.env.ARES_MCP_CONFIG_PATH ?? './mcp.servers.json');
 }
 
 export function parsePythonConfig(): PythonConfig {
@@ -357,4 +365,10 @@ export function parseMcpServers(raw: string | undefined): McpServerConfig[] {
         : {}),
     };
   });
+}
+
+export function parseAllMcpServers(): McpServerConfig[] {
+  const envServers = parseMcpServers(process.env.ARES_MCP_SERVERS);
+  const managedServers = activeMcpServers(parseMcpConfigPath());
+  return [...managedServers, ...envServers];
 }

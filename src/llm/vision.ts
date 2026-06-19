@@ -13,6 +13,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { redactSensitiveText } from '../security/redactor.js';
 
 /** Anthropic-supported image media types for the vision API. */
 export const SUPPORTED_IMAGE_MEDIA_TYPES = [
@@ -77,17 +78,17 @@ export class AnthropicVisionExtractor implements VisionExtractor {
               type: 'image',
               source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
             },
-            { type: 'text', text: instructions?.trim() || DEFAULT_INSTRUCTION },
+            { type: 'text', text: redactSensitiveText(instructions?.trim() || DEFAULT_INSTRUCTION) },
           ],
         },
       ],
     });
 
-    return message.content
+    return redactSensitiveText(message.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
       .map((b) => b.text)
       .join('\n')
-      .trim();
+      .trim());
   }
 }
 
