@@ -27,6 +27,7 @@ import { InMemoryTaskStore } from '../tasks/store.js';
 import { InMemoryFeedbackStore } from '../feedback/store.js';
 import type { SearchProvider } from '../tools/builtin/webSearch.js';
 import type { BrowserController, NavResult, PageSnapshot } from '../tools/builtin/browser.js';
+import type { EmailSender } from '../tools/builtin/email.js';
 import { buildLlmClient } from '../llm/factory.js';
 import { buildSynthesizer } from '../llm/synthesize.js';
 import { buildSearchProvider } from '../tools/searchFactory.js';
@@ -72,6 +73,10 @@ const stubBrowser: BrowserController = {
   async close() {},
 };
 
+// A no-op email sender so send_email is registered (and gated) under --judge,
+// giving the email_safety case a real draft→confirm→send path to exercise.
+const stubEmailSender: EmailSender = async () => ({ id: 'stub' });
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = new ConsoleLogger('info');
@@ -93,6 +98,7 @@ async function main(): Promise<void> {
     taskStore: new InMemoryTaskStore(),
     feedbackStore: new InMemoryFeedbackStore(),
     browserController: stubBrowser,
+    emailSender: stubEmailSender,
   });
 
   const skillIndex = config.skillsDir ? loadSkillIndex(config.skillsDir, logger) : undefined;

@@ -23,6 +23,7 @@ import { createFileTools } from '../src/tools/builtin/files.js';
 import { createMemoryTools } from '../src/tools/builtin/memory.js';
 import { createWebSearchTool, type SearchProvider } from '../src/tools/builtin/webSearch.js';
 import { createBrowserTools, type BrowserController, type NavResult, type PageSnapshot } from '../src/tools/builtin/browser.js';
+import { createEmailTools } from '../src/tools/builtin/email.js';
 import { InMemoryTaskStore } from '../src/tasks/store.js';
 import { InMemoryFeedbackStore } from '../src/feedback/store.js';
 import { InMemoryStructuredStore } from '../src/memory/stores.js';
@@ -45,6 +46,7 @@ function realRegistry(): ToolRegistry {
   for (const t of createFeedbackTools(new InMemoryFeedbackStore())) reg.register(t);
   for (const t of createMemoryTools(new InMemoryStructuredStore())) reg.register(t);
   for (const t of createBrowserTools(stubBrowser)) reg.register(t);
+  for (const t of createEmailTools({ sender: async () => ({ id: 'stub' }) })) reg.register(t);
   reg.register(createWebSearchTool(stubSearch));
   return reg;
 }
@@ -89,7 +91,7 @@ describe('buildAresEvaluator probes', () => {
   });
 
   it('fails when the gated tool is not even registered', async () => {
-    const r = await evaluate({ name: 't', category: 'email_safety', probe: { type: 'tool_gating', tool: 'send_email', requiresConfirmation: true } });
+    const r = await evaluate({ name: 't', category: 'email_safety', probe: { type: 'tool_gating', tool: 'wire_money', requiresConfirmation: true } });
     assert.equal(r.status, 'fail');
     assert.match(r.detail, /not registered/);
   });

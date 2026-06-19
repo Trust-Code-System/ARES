@@ -22,6 +22,7 @@ import { createMemoryTools } from './builtin/memory.js';
 import type { StructuredStore } from '../memory/stores.js';
 import { createPythonTool, type PythonToolOptions } from './builtin/python.js';
 import { createBrowserTools, type BrowserController } from './builtin/browser.js';
+import { createEmailTools, type EmailSender } from './builtin/email.js';
 import { createSystemActionTools } from './builtin/systemActions.js';
 import { createDocumentTools } from './builtin/documents.js';
 import { createRemotionTool } from './builtin/remotion.js';
@@ -59,6 +60,11 @@ export interface RegistryOptions {
   browserController?: BrowserController;
   /** Per-action timeout for the browser tools (ms). */
   browserTimeoutMs?: number;
+  /**
+   * Email transport. draft_email is always registered; send_email is registered
+   * only when a sender is supplied (i.e. SMTP is configured). Absent → draft-only.
+   */
+  emailSender?: EmailSender;
   /** Cross-platform approved application and URL launch tools. */
   systemActionsEnabled?: boolean;
   /** Remotion video scaffolder. Registered only when enabled (default off). */
@@ -153,6 +159,11 @@ export function createDefaultRegistry(opts: RegistryOptions): ToolRegistry {
     for (const tool of createBrowserTools(opts.browserController, opts.browserTimeoutMs)) {
       registry.register(tool);
     }
+  }
+
+  // draft_email is always available; send_email is added only when configured.
+  for (const tool of createEmailTools(opts.emailSender ? { sender: opts.emailSender } : {})) {
+    registry.register(tool);
   }
 
   if (opts.systemActionsEnabled) {

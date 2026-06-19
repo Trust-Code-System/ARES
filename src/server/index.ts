@@ -34,6 +34,7 @@ import { buildTaskStore } from '../tasks/store.js';
 import { buildFeedbackStore } from '../feedback/store.js';
 import { buildPreferenceSeeder } from '../feedback/actionRanking.js';
 import { createPlaywrightController } from '../tools/builtin/playwrightController.js';
+import { buildEmailSender } from '../tools/emailSender.js';
 import { buildToolPermissionStore } from '../tools/permissions.js';
 import { ARES_CAPABILITY_PROMPT } from '../agent/capabilities.js';
 
@@ -110,6 +111,8 @@ async function main(): Promise<void> {
     ? createPlaywrightController({ headless: config.browser.headless, timeoutMs: config.browser.timeoutMs })
     : undefined;
 
+  const emailSender = buildEmailSender(config.email);
+
   const registry = createDefaultRegistry({
     workspaceDir: config.workspaceDir,
     ...(searchProvider ? { searchProvider } : {}),
@@ -127,6 +130,7 @@ async function main(): Promise<void> {
     taskStore: tasks,
     feedbackStore: feedback,
     ...(browser ? { browserController: browser, browserTimeoutMs: config.browser.timeoutMs } : {}),
+    ...(emailSender ? { emailSender } : {}),
     mcpConfigPath: config.mcpConfigPath,
     ...(config.skillsDir ? { skills: { dir: config.skillsDir } } : {}),
     ...(config.agentsDir ? { agents: { dir: config.agentsDir } } : {}),

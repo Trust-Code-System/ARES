@@ -24,6 +24,20 @@ export interface PythonConfig {
   maxOutputBytes: number;
 }
 
+/**
+ * Email config. Drafting is always available; SENDING is off unless enabled with
+ * an SMTP host. The password is a secret held in env, never stored by ARES.
+ */
+export interface EmailConfig {
+  enabled: boolean;
+  host?: string;
+  port: number;
+  secure: boolean;
+  user?: string;
+  pass?: string;
+  from?: string;
+}
+
 /** Headless-browser / form-filling tool config. Off by default (heavy + risky). */
 export interface BrowserConfig {
   enabled: boolean;
@@ -105,6 +119,8 @@ export interface Config {
   python: PythonConfig;
   /** Headless browser + form-filling tools (off unless ARES_BROWSER_ENABLED=true). */
   browser: BrowserConfig;
+  /** Email: draft_email is always on; send_email needs enabled + SMTP host. */
+  email: EmailConfig;
   systemActionsEnabled: boolean;
   /** Remotion video scaffolder (off unless ARES_REMOTION_ENABLED=true). */
   remotionEnabled: boolean;
@@ -232,6 +248,7 @@ export function loadConfig(): Config {
     shell: parseShellConfig(),
     python: parsePythonConfig(),
     browser: parseBrowserConfig(),
+    email: parseEmailConfig(),
     systemActionsEnabled: process.env.ARES_SYSTEM_ACTIONS_ENABLED === 'true',
     remotionEnabled: process.env.ARES_REMOTION_ENABLED === 'true',
     trading: parseTradingConfig(),
@@ -292,6 +309,24 @@ export function parseBrowserConfig(): BrowserConfig {
     // Default headless; set ARES_BROWSER_HEADLESS=false to watch ARES work.
     headless: !['false', '0', 'off', 'no'].includes((process.env.ARES_BROWSER_HEADLESS ?? '').toLowerCase()),
     timeoutMs,
+  };
+}
+
+/** Parse the email config. Sending is off unless enabled AND an SMTP host is set. */
+export function parseEmailConfig(): EmailConfig {
+  const port = Number(process.env.ARES_SMTP_PORT ?? '587');
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`ARES_SMTP_PORT must be a port number 1-65535, got "${process.env.ARES_SMTP_PORT}".`);
+  }
+  return {
+    enabled: process.env.ARES_EMAIL_ENABLED === 'true',
+    ...(process.env.ARES_SMTP_HOST ? { host: process.env.ARES_SMTP_HOST } : {}),
+    port,
+    // Default false (STARTTLS on 587); set ARES_SMTP_SECURE=true for implicit TLS (465).
+    secure: ['true', '1', 'yes'].includes((process.env.ARES_SMTP_SECURE ?? '').toLowerCase()),
+    ...(process.env.ARES_SMTP_USER ? { user: process.env.ARES_SMTP_USER } : {}),
+    ...(process.env.ARES_SMTP_PASS ? { pass: process.env.ARES_SMTP_PASS } : {}),
+    ...(process.env.ARES_EMAIL_FROM ? { from: process.env.ARES_EMAIL_FROM } : {}),
   };
 }
 
