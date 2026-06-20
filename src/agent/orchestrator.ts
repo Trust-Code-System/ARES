@@ -29,7 +29,7 @@ import type {
   ToolContext,
 } from '../types.js';
 import type { CreateMessageParams, ModelTier } from '../llm/anthropic.js';
-import type { ModelRouter } from '../llm/router.js';
+import type { ModelRouter, ResolvedModel, Provider } from '../llm/router.js';
 import { parseModelChoice, type ParsedModelChoice } from '../llm/modelChoice.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { formatZodError } from '../tools/define.js';
@@ -194,12 +194,11 @@ export class Agent {
       //    Effort (quick/standard/deep) is an orthogonal depth knob applied on top.
       const profile = effortProfile(parseEffort(input.effort));
       const selection = parseModelChoice(input.model);
-      let loopClient: MessageClient = this.opts.client;
       let loopTier: ModelTier = 'reasoning';
+      let explicitProvider: Provider | undefined;
       if (selection.mode === 'explicit') {
-        const resolved = this.resolveExplicit(selection);
-        loopClient = resolved.client;
-        loopTier = resolved.tier;
+        loopTier = this.resolveExplicit(selection).tier;
+        explicitProvider = selection.provider;
       } else {
         // Deep effort always works the full agent — never the chat fast-path.
         const verdict = profile.forceFullAgent ? 'complex' : await this.routeTurn(modelInput, signal);
@@ -208,14 +207,29 @@ export class Agent {
         // Effort biases the tier on top of the auto classification.
         if (profile.tierBias) loopTier = profile.tierBias;
       }
+      // Drive the loop through a client that fails over to the next keyed provider
+      // if the chosen one errors (e.g. a transient 429), so one provider blip can't
+      // kill the turn. Without a router this is the single configured client.
+      const loopClient: MessageClient = this.buildLoopClient(explicitProvider, loopTier);
 
       // Effort can tighten the tool-round-trip budget for the turn.
       const maxIterations = profile.maxIterationsCap
         ? Math.min(this.opts.maxIterations, profile.maxIterationsCap)
         : this.opts.maxIterations;
 
-      // 1. Retrieve relevant memory and fold it into the system prompt.
-      const memoryContext = redactSensitiveText(await this.opts.memory.retrieve(modelInput.text, runId));
+      // 1. Retrieve relevant memory and fold it into the system prompt. A retrieval
+      //    failure (e.g. a transient embeddings rate-limit) must NOT kill the turn —
+      //    degrade to no memory context, exactly as ingestion failures are tolerated.
+      let memoryContext = '';
+      try {
+        memoryContext = redactSensitiveText(await this.opts.memory.retrieve(modelInput.text, runId));
+      } catch (err) {
+        if (isAbortError(err, signal)) throw err;
+        logger.warn('memory retrieval failed; proceeding without memory context', {
+          runId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       let baseSystem = `${redactSensitiveText(this.opts.systemPrompt)}\n\n## Active mode\n${modeInstruction(input.mode)}`;
       if (profile.instruction) baseSystem += `\n\n## Effort\n${profile.instruction}`;
       const system = memoryContext
@@ -469,6 +483,21 @@ export class Agent {
   }
 
   /**
+   * The client that drives the agent loop. With a router, wrap the provider chain
+   * (chosen provider first, then the remaining keyed providers) in a
+   * {@link FallbackMessageClient} so a transient provider failure fails over
+   * instead of killing the turn. Without a router — or with a single provider —
+   * use the one configured client.
+   */
+  private buildLoopClient(provider: Provider | undefined, tier: ModelTier): MessageClient {
+    const router = this.opts.router;
+    if (!router) return this.opts.client;
+    const chain = router.resolveChain({ override: { tier, ...(provider ? { provider } : {}) } });
+    if (chain.length <= 1) return chain[0]?.client ?? this.opts.client;
+    return new FallbackMessageClient(chain, this.opts.logger);
+  }
+
+  /**
    * Classify a turn for `Auto` model selection: 'chat' (answer on the fast path),
    * 'simple' (full agent on the fast tier), or 'complex' (full agent on reasoning).
    * Fail-safe: the same source/mode guards as the fast path gate it, and anything
@@ -665,6 +694,45 @@ function missingRequired(tool: Tool, input: unknown): string[] {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A {@link MessageClient} that tries an ordered chain of provider clients,
+ * failing over to the next on a provider error. It does NOT fail over on a user
+ * abort, nor once the active provider has already streamed text to the user —
+ * switching mid-stream would duplicate output — and rethrows in both cases.
+ * Transient errors within a single provider (429 bursts, 5xx) are already
+ * retried with backoff by that provider's SDK before they surface here.
+ */
+export class FallbackMessageClient implements MessageClient {
+  constructor(
+    private readonly chain: ResolvedModel[],
+    private readonly logger: Logger,
+  ) {}
+
+  async createMessage(params: CreateMessageParams): Promise<Anthropic.Message> {
+    let lastErr: unknown;
+    for (let i = 0; i < this.chain.length; i++) {
+      const link = this.chain[i]!;
+      let emitted = false;
+      const attempt: CreateMessageParams = params.onText
+        ? { ...params, onText: (delta: string) => { emitted = true; params.onText!(delta); } }
+        : params;
+      try {
+        return await link.client.createMessage(attempt);
+      } catch (err) {
+        if (isAbortError(err, params.signal) || emitted) throw err;
+        lastErr = err;
+        const next = this.chain[i + 1];
+        this.logger.warn('provider failed, falling over', {
+          from: link.provider,
+          to: next?.provider ?? null,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('all providers failed');
+  }
 }
 
 function isAbortError(err: unknown, signal?: AbortSignal): boolean {

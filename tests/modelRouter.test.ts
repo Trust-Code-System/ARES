@@ -76,6 +76,20 @@ describe('ModelRouter — runtime', () => {
     assert.equal(m.model, 'anthropic-reasoning');
   });
 
+  it('resolveChain() lists the routed primary first, then the rest in fallback order, all same tier', () => {
+    const router = new ModelRouter(
+      new Map([
+        ['anthropic', fakeRuntime('anthropic', 'ok')],
+        ['openai', fakeRuntime('openai', 'ok')],
+        ['gemini', fakeRuntime('gemini', 'ok')],
+      ]),
+      'openai',
+    );
+    const chain = router.resolveChain({ override: { provider: 'openai', tier: 'fast' } });
+    assert.deepEqual(chain.map((m) => m.provider), ['openai', 'anthropic', 'gemini']);
+    assert.deepEqual(chain.map((m) => m.model), ['openai-fast', 'anthropic-fast', 'gemini-fast']);
+  });
+
   it('withFallback() moves to the next provider when the first throws', async () => {
     const router = new ModelRouter(
       new Map([

@@ -18,7 +18,7 @@ import type {
   ResponseOutputItem,
   ToolChoiceFunction,
 } from 'openai/resources/responses/responses';
-import type { CreateMessageParams, ModelTier } from './anthropic.js';
+import { LLM_MAX_RETRIES, type CreateMessageParams, type ModelTier } from './anthropic.js';
 import { redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 
 export interface OpenAIResponsesClientOptions {
@@ -43,6 +43,7 @@ export class OpenAIResponsesClient {
   constructor(opts: OpenAIResponsesClientOptions) {
     this.sdk = opts.sdk ?? new OpenAI({
       apiKey: opts.apiKey,
+      maxRetries: LLM_MAX_RETRIES,
       ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
     });
     this.models = { reasoning: opts.reasoningModel, fast: opts.fastModel };

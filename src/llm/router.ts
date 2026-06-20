@@ -185,10 +185,12 @@ export class ModelRouter {
   }
 
   /**
-   * Run `fn` against the resolved client, falling back to the remaining providers
-   * (same tier) on error. Returns the result of the first provider that succeeds.
+   * The ordered provider chain for a task: the routed primary first, then the
+   * remaining available providers (same tier) in fallback order. Callers that own
+   * their own retry/stream semantics (e.g. the agent loop) consume this directly;
+   * {@link withFallback} wraps it with a try-next loop.
    */
-  async withFallback<T>(task: RoutingTask, fn: (m: ResolvedModel) => Promise<T>): Promise<T> {
+  resolveChain(task: RoutingTask): ResolvedModel[] {
     const primary = this.resolve(task);
     const tried = new Set<Provider>([primary.provider]);
     const chain: ResolvedModel[] = [primary];
@@ -204,7 +206,15 @@ export class ModelRouter {
         reason: `fallback after ${primary.provider} failed`,
       });
     }
+    return chain;
+  }
 
+  /**
+   * Run `fn` against the resolved client, falling back to the remaining providers
+   * (same tier) on error. Returns the result of the first provider that succeeds.
+   */
+  async withFallback<T>(task: RoutingTask, fn: (m: ResolvedModel) => Promise<T>): Promise<T> {
+    const chain = this.resolveChain(task);
     let lastErr: unknown;
     for (const m of chain) {
       try {
