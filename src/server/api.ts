@@ -11,12 +11,12 @@
  * tested directly; httpServer.ts is the thin node:http adapter around it.
  */
 
-import type { AgentEventHandlers, AgentInput, AgentRunResult, AuditLog } from '../types.js';
+import type { AgentEventHandlers, AgentInput, AgentRunResult, AuditEvent, AuditLog } from '../types.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ActivityFeed, KillSwitch } from '../autonomy/store.js';
 import type { Scheduler } from '../autonomy/scheduler.js';
-import type { ConfirmationQueueStore, StandingRulesStore } from '../safety/store.js';
+import type { ConfirmationQueueStore, ConfirmationRequest, StandingRulesStore } from '../safety/store.js';
 import type { SemanticStore, StructuredStore } from '../memory/stores.js';
 import type { EmbeddingClient } from '../memory/embeddings.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -40,9 +40,18 @@ import {
   toggleToolSchema,
   updateTaskSchema,
 } from './schemas.js';
-import { containsSensitiveData, redactSensitiveText } from '../security/redactor.js';
+import { containsSensitiveData, redactSensitiveData, redactSensitiveText } from '../security/redactor.js';
 import { loadSkillIndex } from '../skills/loader.js';
 import { formatScanReport, scanSkills } from '../skills/scanner.js';
+import { installSkillRepo } from '../skills/installer.js';
+import {
+  loadMcpConfigFile,
+  mcpServerFromCommand,
+  mcpServerFromNpmPackage,
+  removeMcpServer,
+  setMcpServerEnabled,
+  upsertMcpServer,
+} from '../mcp/configStore.js';
 
 export interface AgentLike {
   run(
@@ -97,6 +106,8 @@ export interface ApiDeps {
     capabilities?: RuntimeCapability[];
   };
   skillsDir?: string;
+  /** Managed MCP server config file path — enables the /api/mcp REST surface. */
+  mcpConfigPath?: string;
 }
 
 export interface ApiRequest {
@@ -109,6 +120,16 @@ export interface ApiRequest {
 export interface ApiResponse {
   status: number;
   body: unknown;
+}
+
+/** Result of resolving a queued confirmation from a chat "approve"/"deny" turn. */
+export interface ApprovalOutcome {
+  runId: string;
+  finalText: string;
+  stopReason: 'completed';
+  toolCalls: Array<{ name: string; ok: boolean }>;
+  /** Audit events recorded while running the approved tool, for live streaming. */
+  events: AuditEvent[];
 }
 
 export class ApiHandler {
@@ -197,12 +218,7 @@ export class ApiHandler {
       return this.getSkill(decodeURIComponent(seg.slice(2).join('/')));
     }
     if (method === 'POST' && path === '/api/skills/audit') return this.auditSkills();
-    if (method === 'POST' && path === '/api/skills/import') {
-      return ok({
-        accepted: false,
-        message: 'Use npm run skills:import -- <repo-url...>; imported skills are disabled pending audit.',
-      });
-    }
+    if (method === 'POST' && path === '/api/skills/import') return this.importSkillRepo(req.body);
     if (method === 'POST' && seg[1] === 'skills' && seg[2] && seg[3] === 'enable') {
       return this.setSkillEnabled(decodeURIComponent(seg.slice(2, -1).join('/')), true);
     }
@@ -215,6 +231,16 @@ export class ApiHandler {
     if (method === 'GET' && seg[1] === 'skills' && seg[2] && seg[3] === 'logs') {
       return ok({ logs: [], note: 'Skill execution logs are available through run audit events.' });
     }
+
+    if (method === 'GET' && path === '/api/mcp') return this.listMcpServers();
+    if (method === 'POST' && path === '/api/mcp/install') return this.installMcpServer(req.body);
+    if (method === 'POST' && seg[1] === 'mcp' && seg[2] && seg[3] === 'enable') {
+      return this.setMcpEnabled(decodeURIComponent(seg[2]), true);
+    }
+    if (method === 'POST' && seg[1] === 'mcp' && seg[2] && seg[3] === 'disable') {
+      return this.setMcpEnabled(decodeURIComponent(seg[2]), false);
+    }
+    if (method === 'DELETE' && seg[1] === 'mcp' && seg[2]) return this.removeMcpServer(decodeURIComponent(seg[2]));
 
     if (method === 'GET' && path === '/api/agents') {
       return ok({ agents: [], note: 'Filesystem agent library is exposed to the model through use_agent/find_agent tools.' });
@@ -249,6 +275,21 @@ export class ApiHandler {
   private async chat(req: ApiRequest): Promise<ApiResponse> {
     const parsed = parseBody(chatSchema, req.body);
     if (!parsed.ok) return badRequest(parsed.error);
+
+    // A bare "approved"/"deny" turn refers to whatever ARES last queued for
+    // approval — resolve and run it directly rather than handing it to the model,
+    // which has no memory of the pending action and would just re-queue.
+    const shortcut = await this.tryApprovalShortcut(parsed.data.text);
+    if (shortcut) {
+      return ok({
+        runId: shortcut.runId,
+        finalText: shortcut.finalText,
+        stopReason: shortcut.stopReason,
+        toolCalls: shortcut.toolCalls,
+        events: this.deps.audit.forRun(shortcut.runId),
+      });
+    }
+
     const result = await this.deps.agent.run({
       text: parsed.data.text,
       source: 'user',
@@ -335,6 +376,126 @@ export class ApiHandler {
     const resolved = await this.deps.queue.resolve(id, parsed.data.decision, 'ui');
     if (!resolved) return { status: 404, body: { error: 'no pending confirmation with that id' } };
     return ok({ resolved });
+  }
+
+  /**
+   * When a chat turn is a bare approval ("approved", "yes", "go ahead") or refusal
+   * ("deny", "cancel", "no") AND something is queued for approval, resolve the most
+   * recent pending request and — on approval — actually run its tool, recording the
+   * same gate/execution audit events a normal run would. Returns null when the turn
+   * isn't an approve/deny phrase or nothing is pending, so normal chat proceeds.
+   *
+   * Public so the streaming endpoint (httpServer) can short-circuit too.
+   */
+  async tryApprovalShortcut(text: string): Promise<ApprovalOutcome | null> {
+    const intent = approvalIntent(text);
+    if (!intent) return null;
+    const pending = await this.deps.queue.pending();
+    if (pending.length === 0) return null;
+    const item = pending[pending.length - 1]!; // the most recently queued request
+
+    if (intent === 'deny') {
+      await this.deps.queue.resolve(item.id, 'denied', 'user');
+      return {
+        runId: item.runId,
+        finalText: `Okay — cancelled. I won't run ${item.tool}.`,
+        stopReason: 'completed',
+        toolCalls: [],
+        events: [],
+      };
+    }
+    return this.executeApproved(item);
+  }
+
+  /**
+   * Mark a queued request approved and execute its tool. The human is approving it
+   * now, so this deliberately bypasses the confirmation gate (re-gating with no
+   * human present would only re-queue it). Spend caps and sensitive-input checks
+   * were already enforced when the request was first queued.
+   */
+  private async executeApproved(item: ConfirmationRequest): Promise<ApprovalOutcome> {
+    await this.deps.queue.resolve(item.id, 'approved', 'user');
+    const events: AuditEvent[] = [];
+    const rec = (type: AuditEvent['type'], detail: Record<string, unknown>): void => {
+      const event: AuditEvent = { runId: item.runId, ts: new Date().toISOString(), type, detail };
+      this.deps.audit.record(event);
+      events.push(event);
+    };
+    rec('tool_gate_decision', { tool: item.tool, approved: true, reason: 'approved by user in chat' });
+
+    const tool = this.deps.registry.get(item.tool);
+    if (!tool || !this.deps.registry.isEnabled(item.tool)) {
+      rec('tool_failed', { tool: item.tool, error: tool ? 'disabled tool' : 'unknown tool' });
+      return {
+        runId: item.runId,
+        finalText: `I approved it, but I can't run ${item.tool} right now — it's ${tool ? 'disabled' : 'unavailable'}.`,
+        stopReason: 'completed',
+        toolCalls: [{ name: item.tool, ok: false }],
+        events,
+      };
+    }
+
+    // Remember this exact approval: a standing allow-rule scoped to the precise
+    // input means the identical request runs next time without re-queuing, while a
+    // different input (e.g. another URL) still prompts. Mirrors the gate's "always
+    // allow this exact input" path. Best-effort — a rules-store hiccup must not
+    // block the action the user just approved.
+    const remembered = await this.rememberApproval(item);
+
+    try {
+      const result = await tool.execute((item.input ?? {}) as never, {
+        logger: { log() {}, debug() {}, info() {}, warn() {}, error() {} },
+        runId: item.runId,
+      });
+      rec(result.ok ? 'tool_executed' : 'tool_failed', {
+        tool: item.tool,
+        ok: result.ok,
+        data: redactSensitiveData(result.data ?? null),
+      });
+      const content = redactSensitiveText(result.content ?? '').trim();
+      const note = remembered ? " I won't ask again for this exact action." : '';
+      return {
+        runId: item.runId,
+        finalText: result.ok
+          ? `${content || `Done — ran ${item.tool}.`}${note}`
+          : `I approved it, but ${item.tool} failed: ${content || 'unknown error'}.`,
+        stopReason: 'completed',
+        toolCalls: [{ name: item.tool, ok: result.ok }],
+        events,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      rec('tool_failed', { tool: item.tool, error: message });
+      return {
+        runId: item.runId,
+        finalText: `I approved it, but ${item.tool} threw: ${message}.`,
+        stopReason: 'completed',
+        toolCalls: [{ name: item.tool, ok: false }],
+        events,
+      };
+    }
+  }
+
+  /**
+   * Persist a standing allow-rule for this exact tool input so an identical future
+   * request is pre-authorized by the gate (no re-queue). Scoped to the precise
+   * input — never tool-wide — so approving "open google.com" can't silently allow
+   * a different URL. Returns whether a rule was created (skipped for non-object
+   * inputs, which can't be matched as a subset). Guarded: never throws.
+   */
+  private async rememberApproval(item: ConfirmationRequest): Promise<boolean> {
+    if (!item.input || typeof item.input !== 'object' || Array.isArray(item.input)) return false;
+    try {
+      await this.deps.rules.add({
+        tool: item.tool,
+        match: redactSensitiveData(structuredClone(item.input)) as Record<string, unknown>,
+        effect: 'allow',
+        reason: `user approved this exact ${item.tool} input in chat`,
+      });
+      return true;
+    } catch {
+      return false; // a rules-store failure shouldn't undo the approval itself
+    }
   }
 
   private async setKillSwitch(body: unknown): Promise<ApiResponse> {
@@ -458,6 +619,150 @@ export class ApiHandler {
 
   private skillDir(): string {
     return this.deps.skillsDir ?? 'skills';
+  }
+
+  /**
+   * Install a GitHub skill-pack into the managed library from a pasted repo URL —
+   * the same flow as the chat-side `install_skill_repo` tool, exposed to the
+   * dashboard. Clones files only (never executes repo code), runs the static
+   * scanner, and refuses activation on `critical`+ findings by default.
+   */
+  private async importSkillRepo(body: unknown): Promise<ApiResponse> {
+    const input = body as {
+      url?: unknown;
+      ref?: unknown;
+      overwrite?: unknown;
+      blockSeverity?: unknown;
+    };
+    if (typeof input?.url !== 'string' || !input.url.trim()) return badRequest('body.url is required');
+    const blockSeverity =
+      input.blockSeverity === 'critical' ||
+      input.blockSeverity === 'high' ||
+      input.blockSeverity === 'medium' ||
+      input.blockSeverity === 'low'
+        ? input.blockSeverity
+        : undefined;
+    try {
+      const installed = await installSkillRepo({
+        skillsDir: this.skillDir(),
+        url: input.url.trim(),
+        ...(typeof input.ref === 'string' && input.ref.trim() ? { ref: input.ref.trim() } : {}),
+        ...(typeof input.overwrite === 'boolean' ? { overwrite: input.overwrite } : {}),
+        ...(blockSeverity ? { blockSeverity } : {}),
+      });
+      return ok({
+        installed: {
+          owner: installed.owner,
+          repo: installed.repo,
+          ref: installed.ref ?? null,
+          url: installed.url,
+          dir: installed.dir,
+          skillsInstalled: installed.skillsInstalled,
+          worstFinding: installed.worstFinding ?? null,
+          scanReport: installed.scanReport,
+        },
+      });
+    } catch (err) {
+      return badRequest(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // --- Managed MCP servers (mirrors the install_mcp_server chat tools) ---------
+
+  private mcpConfigPath(): string | undefined {
+    return this.deps.mcpConfigPath;
+  }
+
+  private listMcpServers(): ApiResponse {
+    const configPath = this.mcpConfigPath();
+    if (!configPath) return ok({ servers: [], note: 'MCP management is not configured on this server.' });
+    const config = loadMcpConfigFile(configPath);
+    return ok({
+      servers: config.servers.map((s) => ({
+        name: s.name,
+        command: s.command,
+        args: s.args ?? [],
+        enabled: s.enabled,
+        source: s.source ?? null,
+        namespace: s.namespace ?? null,
+        installedAt: s.installedAt ?? null,
+      })),
+    });
+  }
+
+  private installMcpServer(body: unknown): ApiResponse {
+    const configPath = this.mcpConfigPath();
+    if (!configPath) return { status: 404, body: { error: 'MCP management is not configured on this server.' } };
+    const input = body as {
+      name?: unknown;
+      npmPackage?: unknown;
+      packageArgs?: unknown;
+      command?: unknown;
+      args?: unknown;
+      env?: unknown;
+      namespace?: unknown;
+      enabled?: unknown;
+      overwrite?: unknown;
+    };
+    if (typeof input?.name !== 'string' || !input.name.trim()) return badRequest('body.name is required');
+    const hasNpm = typeof input.npmPackage === 'string' && input.npmPackage.trim();
+    const hasCommand = typeof input.command === 'string' && input.command.trim();
+    if (Boolean(hasNpm) === Boolean(hasCommand)) {
+      return badRequest('Provide exactly one of npmPackage or command.');
+    }
+    const env =
+      input.env && typeof input.env === 'object' && !Array.isArray(input.env)
+        ? (input.env as Record<string, string>)
+        : undefined;
+    const strArr = (v: unknown): string[] | undefined =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined;
+    try {
+      const server = hasNpm
+        ? mcpServerFromNpmPackage({
+            name: input.name,
+            npmPackage: (input.npmPackage as string).trim(),
+            ...(strArr(input.packageArgs) ? { packageArgs: strArr(input.packageArgs) } : {}),
+            ...(env ? { env } : {}),
+            ...(typeof input.namespace === 'string' ? { namespace: input.namespace } : {}),
+            ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+          })
+        : mcpServerFromCommand({
+            name: input.name,
+            command: (input.command as string).trim(),
+            ...(strArr(input.args) ? { args: strArr(input.args) } : {}),
+            ...(env ? { env } : {}),
+            ...(typeof input.namespace === 'string' ? { namespace: input.namespace } : {}),
+            ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+          });
+      const config = upsertMcpServer(configPath, server, {
+        overwrite: typeof input.overwrite === 'boolean' ? input.overwrite : true,
+      });
+      return ok({ server, total: config.servers.length });
+    } catch (err) {
+      return badRequest(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private setMcpEnabled(name: string, enabled: boolean): ApiResponse {
+    const configPath = this.mcpConfigPath();
+    if (!configPath) return { status: 404, body: { error: 'MCP management is not configured on this server.' } };
+    try {
+      setMcpServerEnabled(configPath, name, enabled);
+      return ok({ name, enabled });
+    } catch (err) {
+      return { status: 404, body: { error: err instanceof Error ? err.message : String(err) } };
+    }
+  }
+
+  private removeMcpServer(name: string): ApiResponse {
+    const configPath = this.mcpConfigPath();
+    if (!configPath) return { status: 404, body: { error: 'MCP management is not configured on this server.' } };
+    try {
+      removeMcpServer(configPath, name);
+      return ok({ removed: true, name });
+    } catch (err) {
+      return { status: 404, body: { error: err instanceof Error ? err.message : String(err) } };
+    }
   }
 
   private async listNotifications(req: ApiRequest): Promise<ApiResponse> {
@@ -591,6 +896,38 @@ export class ApiHandler {
     });
     return ok({ preference });
   }
+}
+
+/**
+ * Whole-message phrases that approve or refuse a pending action. Matched against
+ * the normalized full message (never a substring) so a longer instruction that
+ * merely contains "yes" or "no" is left for the model — this only fires on a turn
+ * that is *nothing but* an approve/deny, and only when something is actually queued.
+ */
+const APPROVE_PHRASES = new Set([
+  'approve', 'approved', 'approve it', 'approve that', 'approve this',
+  'yes', 'yes please', 'yes approve', 'yes do it', 'yeah', 'yep', 'yup',
+  'ok', 'okay', 'ok do it', 'okay do it', 'do it', 'do it now', 'go', 'go ahead',
+  'go for it', 'confirm', 'confirmed', 'allow', 'allow it', 'proceed', 'sure',
+  'open it', 'open it now', 'run it', 'execute', 'execute it', 'send it', 'please do',
+]);
+const DENY_PHRASES = new Set([
+  'deny', 'denied', 'deny it', 'reject', 'rejected', 'no', 'nope', 'cancel',
+  'cancel it', 'stop', "don't", 'dont', 'do not', 'never mind', 'nevermind',
+  'abort', 'no thanks', "no don't", 'no dont',
+]);
+
+/** Classify a chat turn as a bare approval, refusal, or neither (→ normal chat). */
+function approvalIntent(text: string): 'approve' | 'deny' | null {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized || normalized.length > 40) return null;
+  if (APPROVE_PHRASES.has(normalized)) return 'approve';
+  if (DENY_PHRASES.has(normalized)) return 'deny';
+  return null;
 }
 
 function ok(body: unknown): ApiResponse {

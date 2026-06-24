@@ -10,6 +10,8 @@ const LINKS = [
   { href: '/memory', label: 'Memory', accent: 'cyan' },
   { href: '/activity', label: 'Activity', accent: 'cyan' },
   { href: '/tools', label: 'Tools', accent: 'cyan' },
+  { href: '/skills/import', label: 'Skills', accent: 'cyan' },
+  { href: '/mcp', label: 'MCP', accent: 'cyan' },
 ] as const;
 
 export function PrimaryNav() {

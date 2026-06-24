@@ -177,6 +177,7 @@ async function main(): Promise<void> {
       toolPermissions,
       registry,
       ...(config.skillsDir ? { skillsDir: config.skillsDir } : {}),
+      ...(config.mcpConfigPath ? { mcpConfigPath: config.mcpConfigPath } : {}),
       ...(voice ? { voice } : {}),
       ...(visionExtractor ? { vision: visionExtractor } : {}),
       runtime: {

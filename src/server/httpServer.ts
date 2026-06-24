@@ -214,6 +214,22 @@ export class ApiServer {
     const { text, mode, model, effort, history } = parsed.data;
 
     send('start', { text, mode: mode ?? 'general' });
+
+    // A bare "approved"/"deny" turn resolves whatever ARES last queued and runs it,
+    // without a model round trip (the model has no memory of the pending action).
+    const shortcut = await this.handler.tryApprovalShortcut(text);
+    if (shortcut) {
+      if (shortcut.events.length) send('activity', { events: shortcut.events });
+      if (shortcut.finalText) send('token', { token: shortcut.finalText });
+      send('done', {
+        runId: shortcut.runId,
+        stopReason: shortcut.stopReason,
+        toolCalls: shortcut.toolCalls,
+      });
+      res.end();
+      return;
+    }
+
     const liveEvents: unknown[] = [];
     const result = await this.opts.deps.agent.run(
       {

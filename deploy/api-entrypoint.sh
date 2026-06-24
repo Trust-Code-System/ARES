@@ -15,5 +15,12 @@ until npm run migrate; do
   sleep 3
 done
 
+# If a command was passed (e.g. Render's dockerCommand: "npm run scheduler"),
+# run that after migrations instead of the API server. No args → start the API.
+if [ "$#" -gt 0 ]; then
+  echo "[ares] starting: $*"
+  exec "$@"
+fi
+
 echo "[ares] starting API server..."
 exec npm run serve

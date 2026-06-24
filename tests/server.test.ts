@@ -5,9 +5,12 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import os from 'node:os';
+import path from 'node:path';
+import { rmSync } from 'node:fs';
 import { ApiHandler, type ApiDeps, type ApiRequest } from '../src/server/api.js';
 import { InMemoryActivityFeed, InMemoryKillSwitch } from '../src/autonomy/store.js';
-import { InMemoryConfirmationQueue, InMemoryRulesStore } from '../src/safety/store.js';
+import { InMemoryConfirmationQueue, InMemoryRulesStore, evaluateRules } from '../src/safety/store.js';
 import { InMemoryStructuredStore, InMemorySemanticStore } from '../src/memory/stores.js';
 import { HashEmbeddingClient } from '../src/memory/embeddings.js';
 import { InMemoryAuditLog } from '../src/logging/logger.js';
@@ -139,6 +142,60 @@ describe('ApiHandler', () => {
     assert.equal(bad.status, 400);
   });
 
+  it('runs a queued tool when the user approves it in chat, and cancels on deny', async () => {
+    let opened: string | null = null;
+    const openUrl: Tool = {
+      name: 'open_url',
+      description: 'open a url',
+      kind: 'state_mutating',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
+      async execute(input) {
+        opened = (input as { url: string }).url;
+        return { ok: true, content: `Opened ${opened}.`, data: { url: opened } };
+      },
+    };
+    const audit = new InMemoryAuditLog();
+    const deps: ApiDeps = {
+      agent: fakeAgent(audit),
+      audit,
+      activityFeed: new InMemoryActivityFeed(),
+      killSwitch: new InMemoryKillSwitch(),
+      rules: new InMemoryRulesStore(),
+      queue: new InMemoryConfirmationQueue(),
+      structured: new InMemoryStructuredStore(),
+      registry: new ToolRegistry().register(openUrl),
+    };
+    const handler = new ApiHandler(deps);
+
+    await deps.queue.enqueue({ runId: 'r1', tool: 'open_url', input: { url: 'https://www.google.com' } });
+    const res = await handler.handle(req('POST', '/api/chat', { text: 'approved' }));
+    assert.equal(res.status, 200);
+    const body = res.body as { finalText: string; toolCalls: Array<{ name: string; ok: boolean }> };
+    assert.equal(opened, 'https://www.google.com');
+    assert.match(body.finalText, /^Opened https:\/\/www\.google\.com\./);
+    assert.deepEqual(body.toolCalls, [{ name: 'open_url', ok: true }]);
+    assert.equal((await deps.queue.pending()).length, 0);
+
+    // Approving remembers the exact input as a standing allow-rule: the identical
+    // request is now pre-authorized, but a different URL is not.
+    const rules = await deps.rules.findForTool('open_url');
+    assert.equal(rules.length, 1);
+    assert.equal(evaluateRules(rules, { url: 'https://www.google.com' })?.effect, 'allow');
+    assert.equal(evaluateRules(rules, { url: 'https://evil.com' }), null);
+
+    // "deny" cancels the pending request without running anything.
+    await deps.queue.enqueue({ runId: 'r2', tool: 'open_url', input: { url: 'https://example.com' } });
+    opened = null;
+    const denied = await handler.handle(req('POST', '/api/chat', { text: 'cancel' }));
+    assert.equal(opened, null);
+    assert.match((denied.body as { finalText: string }).finalText, /won't run open_url/);
+    assert.equal((await deps.queue.pending()).length, 0);
+
+    // With nothing queued, "approved" is just a normal chat turn (no shortcut).
+    const passthrough = await handler.handle(req('POST', '/api/chat', { text: 'approved' }));
+    assert.equal((passthrough.body as { finalText: string }).finalText, 'echo: approved');
+  });
+
   it('browses structured memory', async () => {
     const { handler, deps } = build();
     await deps.structured.upsert({ kind: 'fact', subject: 'user', content: 'likes tea', importance: 1, attributes: {} });
@@ -187,5 +244,77 @@ describe('ApiHandler', () => {
     const res = await noSemantic.handler.handle(req('GET', '/api/memory/semantic', undefined, 'q=anything'));
     assert.equal(res.status, 200);
     assert.deepEqual((res.body as { hits: unknown[] }).hits, []);
+  });
+
+  it('rejects a skill import with no url or a non-GitHub url', async () => {
+    const { handler } = build();
+    assert.equal((await handler.handle(req('POST', '/api/skills/import', {}))).status, 400);
+    const res = await handler.handle(req('POST', '/api/skills/import', { url: 'https://example.com/not-github' }));
+    assert.equal(res.status, 400);
+    assert.match((res.body as { error: string }).error, /github/i);
+  });
+});
+
+describe('ApiHandler — managed MCP servers', () => {
+  function mcpBuild() {
+    const base = build();
+    const configPath = path.join(os.tmpdir(), `ares-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    const deps: ApiDeps = { ...base.deps, mcpConfigPath: configPath };
+    return { handler: new ApiHandler(deps), configPath };
+  }
+
+  it('installs, lists, toggles, and removes an MCP server through the config store', async () => {
+    const { handler, configPath } = mcpBuild();
+    try {
+      const empty = await handler.handle(req('GET', '/api/mcp'));
+      assert.equal(empty.status, 200);
+      assert.deepEqual((empty.body as { servers: unknown[] }).servers, []);
+
+      const install = await handler.handle(
+        req('POST', '/api/mcp/install', { name: 'Filesystem!', npmPackage: '@modelcontextprotocol/server-filesystem' }),
+      );
+      assert.equal(install.status, 200);
+      assert.equal((install.body as { server: { name: string } }).server.name, 'filesystem');
+
+      const listed = await handler.handle(req('GET', '/api/mcp'));
+      const servers = (listed.body as { servers: Array<{ name: string; enabled: boolean; command: string }> }).servers;
+      assert.equal(servers.length, 1);
+      assert.equal(servers[0]!.enabled, false);
+      assert.equal(servers[0]!.command, 'npx');
+
+      const enabled = await handler.handle(req('POST', '/api/mcp/filesystem/enable'));
+      assert.equal(enabled.status, 200);
+      assert.equal((enabled.body as { enabled: boolean }).enabled, true);
+
+      const removed = await handler.handle(req('DELETE', '/api/mcp/filesystem'));
+      assert.equal(removed.status, 200);
+      assert.equal((await handler.handle(req('GET', '/api/mcp'))).status, 200);
+      assert.deepEqual(((await handler.handle(req('GET', '/api/mcp'))).body as { servers: unknown[] }).servers, []);
+    } finally {
+      rmSync(configPath, { force: true });
+    }
+  });
+
+  it('validates the install body and 404s unknown servers', async () => {
+    const { handler, configPath } = mcpBuild();
+    try {
+      assert.equal((await handler.handle(req('POST', '/api/mcp/install', { name: 'x' }))).status, 400);
+      assert.equal(
+        (await handler.handle(req('POST', '/api/mcp/install', { name: 'x', npmPackage: 'a', command: 'b' }))).status,
+        400,
+      );
+      assert.equal((await handler.handle(req('POST', '/api/mcp/ghost/enable'))).status, 404);
+      assert.equal((await handler.handle(req('DELETE', '/api/mcp/ghost'))).status, 404);
+    } finally {
+      rmSync(configPath, { force: true });
+    }
+  });
+
+  it('reports MCP as unconfigured when no config path is wired', async () => {
+    const { handler } = build();
+    const res = await handler.handle(req('GET', '/api/mcp'));
+    assert.equal(res.status, 200);
+    assert.match((res.body as { note: string }).note, /not configured/i);
+    assert.equal((await handler.handle(req('POST', '/api/mcp/install', { name: 'x', command: 'y' }))).status, 404);
   });
 });

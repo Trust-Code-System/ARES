@@ -135,6 +135,36 @@ export interface SkillAudit {
   findings: unknown[];
   report: string;
 }
+export interface SkillImportResult {
+  owner: string;
+  repo: string;
+  ref: string | null;
+  url: string;
+  dir: string;
+  skillsInstalled: number;
+  worstFinding: 'low' | 'medium' | 'high' | 'critical' | null;
+  scanReport: string;
+}
+export interface McpServerInfo {
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+  source: string | null;
+  namespace: string | null;
+  installedAt: string | null;
+}
+export interface McpInstallInput {
+  name: string;
+  npmPackage?: string;
+  packageArgs?: string[];
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  namespace?: string;
+  enabled?: boolean;
+  overwrite?: boolean;
+}
 export interface KillSwitchState { engaged: boolean; reason: string | null; changedAt: string; changedBy: string | null; }
 export interface Confirmation { id: string; tool: string; input: unknown; reason: string; createdAt: string; }
 export interface Fact { id: string; kind: string; subject: string; content: string; importance: number; }
@@ -239,6 +269,15 @@ export const api = {
   auditSkills: () => json<SkillAudit>('/api/skills/audit', { method: 'POST' }),
   enableSkill: (id: string) => json(`/api/skills/${encodeURIComponent(id)}/enable`, { method: 'POST' }),
   disableSkill: (id: string) => json(`/api/skills/${encodeURIComponent(id)}/disable`, { method: 'POST' }),
+  importSkill: (input: { url: string; ref?: string; overwrite?: boolean; blockSeverity?: 'low' | 'medium' | 'high' | 'critical' }) =>
+    json<{ installed: SkillImportResult }>('/api/skills/import', { method: 'POST', body: JSON.stringify(input) }),
+  mcpServers: () => json<{ servers: McpServerInfo[]; note?: string }>('/api/mcp'),
+  installMcp: (input: McpInstallInput) =>
+    json<{ server: McpServerInfo; total: number }>('/api/mcp/install', { method: 'POST', body: JSON.stringify(input) }),
+  setMcpEnabled: (name: string, enabled: boolean) =>
+    json<{ name: string; enabled: boolean }>(`/api/mcp/${encodeURIComponent(name)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' }),
+  removeMcp: (name: string) =>
+    json<{ removed: boolean; name: string }>(`/api/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   jobs: () => json<{ jobs: Job[] }>('/api/jobs'),
   notifications: () => json<{ notifications: Notification[]; unread: number }>('/api/notifications'),
   markNotificationRead: (id: string) =>
