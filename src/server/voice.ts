@@ -36,6 +36,41 @@ const DEFAULT_TTS_INSTRUCTIONS =
   'Speak in a calm, natural, conversational tone — fluent and relaxed, like a helpful '
   + 'human assistant talking, not reading text aloud. Use natural pacing and intonation.';
 
+/**
+ * Technical terms ARES users routinely say that generic speech-to-text mangles —
+ * e.g. "ChatGPT MCP" coming back as "gptcmcp". Whisper takes these as a `prompt`
+ * bias and Gemini as an instruction, so both spell them correctly and keep them as
+ * separate words. Extend at runtime with ARES_VOICE_VOCABULARY (comma-separated).
+ */
+const DEFAULT_VOICE_VOCABULARY = [
+  'ChatGPT', 'OpenAI', 'GPT', 'MCP', 'Anthropic', 'Claude', 'Gemini', 'ARES',
+  'LLM', 'API', 'SDK', 'Vercel', 'Render', 'Supabase', 'Postgres', 'pgvector',
+  'GitHub', 'Alpaca', 'ElevenLabs', 'Tavily', 'Voyage', 'npm', 'TypeScript', 'JSON',
+];
+
+/** Merge the default vocabulary with any ARES_VOICE_VOCABULARY extras from env. */
+function resolveVoiceVocabulary(env: NodeJS.ProcessEnv): string[] {
+  const extra = (env.ARES_VOICE_VOCABULARY ?? '')
+    .split(',')
+    .map((term) => term.trim())
+    .filter(Boolean);
+  return [...DEFAULT_VOICE_VOCABULARY, ...extra];
+}
+
+/** A Whisper `prompt` string that biases spelling and word boundaries toward known terms. */
+function whisperVocabularyPrompt(vocabulary: string[]): string {
+  if (!vocabulary.length) return '';
+  return `Domain vocabulary — spell these exactly and keep them as separate words: ${vocabulary.join(', ')}.`;
+}
+
+/** The Gemini transcription instruction, augmented with the domain vocabulary. */
+function geminiTranscribeInstruction(vocabulary: string[]): string {
+  const base = 'Transcribe this voice note exactly. Return only the spoken words, without timestamps or commentary.';
+  if (!vocabulary.length) return base;
+  return `${base} Spell these technical names correctly and keep them as separate words — never merge them: `
+    + `${vocabulary.join(', ')}. For example, "ChatGPT MCP" is two words, not one.`;
+}
+
 export interface OpenAiVoiceOptions {
   apiKey: string;
   /** Speech-to-text model. */
@@ -48,6 +83,8 @@ export interface OpenAiVoiceOptions {
   ttsFormat?: string;
   /** Delivery instructions for steerable models (gpt-4o-mini-tts). */
   ttsInstructions?: string;
+  /** Domain terms to bias transcription toward (Whisper `prompt`). */
+  vocabulary?: string[];
   baseUrl?: string;
   /** Injectable for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
@@ -68,6 +105,7 @@ export class OpenAiVoiceProvider implements VoiceProvider {
   private readonly ttsVoice: string;
   private readonly ttsFormat: string;
   private readonly ttsInstructions: string;
+  private readonly vocabulary: string[];
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
@@ -78,6 +116,7 @@ export class OpenAiVoiceProvider implements VoiceProvider {
     this.ttsVoice = opts.ttsVoice ?? 'alloy';
     this.ttsFormat = opts.ttsFormat ?? 'mp3';
     this.ttsInstructions = opts.ttsInstructions ?? DEFAULT_TTS_INSTRUCTIONS;
+    this.vocabulary = opts.vocabulary ?? DEFAULT_VOICE_VOCABULARY;
     this.baseUrl = opts.baseUrl ?? 'https://api.openai.com/v1';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -88,6 +127,10 @@ export class OpenAiVoiceProvider implements VoiceProvider {
     const form = new FormData();
     form.append('model', this.sttModel);
     form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), `audio.${extForMime(mimeType)}`);
+    // Bias transcription toward known product names so e.g. "ChatGPT MCP" doesn't
+    // come back as "gptcmcp".
+    const prompt = whisperVocabularyPrompt(this.vocabulary);
+    if (prompt) form.append('prompt', prompt);
 
     const res = await this.fetchImpl(`${this.baseUrl}/audio/transcriptions`, {
       method: 'POST',
@@ -187,6 +230,8 @@ export class OpenAiTextToSpeechProvider implements TextToSpeechProvider {
 export interface GeminiSpeechToTextOptions {
   apiKey: string;
   model?: string;
+  /** Domain terms to keep spelled correctly and unmerged in the transcript. */
+  vocabulary?: string[];
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
@@ -195,11 +240,13 @@ export interface GeminiSpeechToTextOptions {
 export class GeminiSpeechToTextProvider implements SpeechToTextProvider {
   readonly name = 'gemini';
   private readonly model: string;
+  private readonly vocabulary: string[];
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: GeminiSpeechToTextOptions) {
     this.model = opts.model ?? 'gemini-3.1-flash-lite';
+    this.vocabulary = opts.vocabulary ?? DEFAULT_VOICE_VOCABULARY;
     this.baseUrl = opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -218,7 +265,7 @@ export class GeminiSpeechToTextProvider implements SpeechToTextProvider {
             role: 'user',
             parts: [
               {
-                text: 'Transcribe this voice note exactly. Return only the spoken words, without timestamps or commentary.',
+                text: geminiTranscribeInstruction(this.vocabulary),
               },
               {
                 inlineData: {
@@ -433,11 +480,13 @@ export function buildVoiceProvider(env: NodeJS.ProcessEnv = process.env): VoiceP
   const elevenVoice = env.ELEVENLABS_VOICE_ID;
   const sttChoice = env.ARES_VOICE_STT_PROVIDER ?? 'auto';
   const ttsChoice = env.ARES_VOICE_TTS_PROVIDER ?? 'auto';
+  const vocabulary = resolveVoiceVocabulary(env);
 
   const stt = sttChoice === 'gemini' || (sttChoice === 'auto' && Boolean(geminiKey))
     ? geminiKey
       ? new GeminiSpeechToTextProvider({
           apiKey: geminiKey,
+          vocabulary,
           ...(env.ARES_GEMINI_STT_MODEL ? { model: env.ARES_GEMINI_STT_MODEL } : {}),
         })
       : undefined
@@ -495,6 +544,7 @@ function selectTts(
 function openAiOptions(env: NodeJS.ProcessEnv, apiKey: string): OpenAiVoiceOptions {
   return {
     apiKey,
+    vocabulary: resolveVoiceVocabulary(env),
     ...(env.ARES_VOICE_STT_MODEL ? { sttModel: env.ARES_VOICE_STT_MODEL } : {}),
     ...(env.ARES_VOICE_TTS_MODEL ? { ttsModel: env.ARES_VOICE_TTS_MODEL } : {}),
     ...(env.ARES_VOICE_TTS_VOICE ? { ttsVoice: env.ARES_VOICE_TTS_VOICE } : {}),
