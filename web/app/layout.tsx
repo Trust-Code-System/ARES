@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import './globals.css';
+import { AresLogo } from '@/components/AresLogo';
 import { AuthGate } from '@/components/AuthGate';
 import { HudCorners } from '@/components/HudCorners';
 import { PrimaryNav } from '@/components/PrimaryNav';
@@ -15,18 +17,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="flex min-h-screen flex-col">
           <header className="relative z-40 flex h-16 shrink-0 items-center justify-between border-b border-ares-line/80 bg-ares-bg/90 px-3 backdrop-blur-xl sm:px-5 md:h-[73px] md:px-6">
-            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-              <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full border border-ares-cyan/60 shadow-hud-cyan">
-                <span className="h-2 w-2 rounded-full bg-ares-cyan shadow-[0_0_12px_#00d9ff]" />
-                <span className="absolute inset-1 animate-hud-spin rounded-full border border-dashed border-ares-cyan/40" />
-              </div>
+            <Link href="/" aria-label="ARES home" className="flex min-w-0 items-center gap-3 outline-none transition hover:opacity-90 focus-visible:opacity-90 sm:gap-4">
+              <AresLogo className="h-9 w-9 shrink-0" />
               <div>
                 <div className="font-mono text-base font-bold tracking-[0.3em] text-ares-cyan sm:text-lg sm:tracking-[0.34em]">ARES</div>
                 <div className="hidden font-mono text-[9px] uppercase tracking-[0.22em] text-ares-muted sm:block">
                   Autonomous Reasoning &amp; Execution System
                 </div>
               </div>
-            </div>
+            </Link>
             <PrimaryNav />
             <div className="telemetry-line absolute bottom-0 left-0 h-px w-full" />
           </header>
