@@ -72,16 +72,15 @@ export default function ToolSettings() {
         </div>
       )}
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-12">
+      <div className="min-w-0 space-y-5">
         <HudPanel
           title={`Tool matrix / ${enabledCount} of ${tools.length} active`}
           code={`TLS-${tools.length.toString().padStart(2, '0')}`}
-          className="xl:col-span-7"
         >
           <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.12em] text-ares-muted">
             {mutatingTools} state-mutating (gated) · {tools.length - mutatingTools} read-only
           </p>
-          <div className="grid max-h-[34rem] gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {tools.length === 0 && <EmptyState text="No tools registered" />}
             {tools.map((tool) => (
               <label
@@ -110,7 +109,7 @@ export default function ToolSettings() {
           </div>
         </HudPanel>
 
-        <div className="space-y-5 xl:col-span-5">
+        <div className="grid gap-5 xl:grid-cols-2">
           <HudPanel title="Capability status" code="CAP-20">
             <div className="grid gap-2 sm:grid-cols-2">
               {runtime?.capabilities?.length ? runtime.capabilities.map((capability) => (
