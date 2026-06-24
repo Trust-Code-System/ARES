@@ -5,6 +5,7 @@ import { AresLogo } from '@/components/AresLogo';
 import { AuthGate } from '@/components/AuthGate';
 import { HudCorners } from '@/components/HudCorners';
 import { PrimaryNav } from '@/components/PrimaryNav';
+import { Analytics } from '@vercel/analytics/next';
 
 export const metadata: Metadata = {
   title: 'ARES',
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <AuthGate>{children}</AuthGate>
           </main>
         </div>
+        <Analytics />
       </body>
     </html>
   );
