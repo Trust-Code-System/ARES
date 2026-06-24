@@ -156,7 +156,11 @@ export class ApiServer {
     const voice = this.opts.deps.voice;
     if (!voice) return notConfigured(res);
     const audio = await readRaw(req);
-    const text = await voice.transcribe(audio, req.headers['content-type'] ?? 'audio/webm');
+    const raw = await voice.transcribe(audio, req.headers['content-type'] ?? 'audio/webm');
+    // Optional LLM cleanup pass: fixes misheard product/brand names using the
+    // fast model's world knowledge. Best-effort — falls back to the raw transcript.
+    const cleaner = this.opts.deps.transcriptCleaner;
+    const text = cleaner ? await cleaner(raw) : raw;
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ text }));
   }

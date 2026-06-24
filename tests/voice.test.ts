@@ -18,6 +18,7 @@ import {
   GeminiSpeechToTextProvider,
   buildVoiceProvider,
 } from '../src/server/voice.js';
+import { buildTranscriptCleaner } from '../src/server/transcriptCleaner.js';
 import { ApiServer } from '../src/server/httpServer.js';
 import type { ApiDeps } from '../src/server/api.js';
 import { InMemoryActivityFeed, InMemoryKillSwitch } from '../src/autonomy/store.js';
@@ -325,5 +326,51 @@ describe('voice HTTP endpoints', () => {
     } finally {
       await server.stop();
     }
+  });
+
+  it('applies the transcript cleaner to the transcribed text', async () => {
+    const cleaner = buildTranscriptCleaner(async (_system, user) =>
+      user.replace(/gptcmcp/i, 'ChatGPT MCP'),
+    );
+    const server = new ApiServer({
+      deps: { ...deps(new FakeVoiceProvider('how do i get gptcmcp')), transcriptCleaner: cleaner },
+      port: 0,
+      logger: silentLogger,
+    });
+    await server.start();
+    const base = `http://localhost:${server.address()}`;
+    try {
+      const tr = await fetch(`${base}/api/voice/transcribe`, {
+        method: 'POST', headers: { 'content-type': 'audio/webm' }, body: Buffer.from('0123456789'),
+      });
+      const { text } = (await tr.json()) as { text: string };
+      assert.match(text, /how do i get ChatGPT MCP/);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe('transcript cleaner', () => {
+  it('returns the cleaned transcript on success', async () => {
+    const clean = buildTranscriptCleaner(async () => '  ChatGPT MCP  ');
+    assert.equal(await clean('gptcmcp'), 'ChatGPT MCP');
+  });
+
+  it('falls back to the original when the model returns nothing', async () => {
+    const clean = buildTranscriptCleaner(async () => '   ');
+    assert.equal(await clean('keep me'), 'keep me');
+  });
+
+  it('falls back when the model answers instead of cleaning (output too long)', async () => {
+    const clean = buildTranscriptCleaner(async () => 'a'.repeat(500));
+    assert.equal(await clean('short input'), 'short input');
+  });
+
+  it('falls back to the original when the model throws', async () => {
+    const clean = buildTranscriptCleaner(async () => {
+      throw new Error('model down');
+    });
+    assert.equal(await clean('untouched'), 'untouched');
   });
 });

@@ -26,6 +26,7 @@ import { TASK_STATUSES, type TaskStatus, type TaskStore } from '../tasks/store.j
 import { type FeedbackRating, type FeedbackStore, type PreferenceSource } from '../feedback/store.js';
 import type { VisionExtractor } from '../llm/vision.js';
 import type { VoiceProvider } from './voice.js';
+import type { TranscriptCleaner } from './transcriptCleaner.js';
 import { CAPABILITY_BLUEPRINT, type CapabilityId, type RuntimeCapability } from '../agent/capabilities.js';
 import { EFFORT_LEVELS } from '../agent/effort.js';
 import {
@@ -81,6 +82,8 @@ export interface ApiDeps {
   scheduler?: Scheduler;
   /** Optional voice provider for the /api/voice/* endpoints (httpServer.ts). */
   voice?: VoiceProvider;
+  /** Optional LLM cleanup pass applied to voice transcripts (httpServer.ts). */
+  transcriptCleaner?: TranscriptCleaner;
   /** Optional vision extractor for OCR on uploaded images (/api/extract). */
   vision?: VisionExtractor;
   /** Semantic store + embedder for the /api/memory/semantic browse endpoint. */
