@@ -25,6 +25,21 @@ const WRITE_VERBS = new Set([
   'unstar', 'rename', 'upload', 'share', 'accept', 'decline', 'batch',
 ]);
 
+/**
+ * Well-known MCP tools whose names the verb heuristic can't recognize, but which
+ * are pure/read-only (no side effects) — so they shouldn't be gated. Matched with
+ * separators and case stripped, so "sequential_thinking", "sequentialThinking",
+ * and "sequentialthinking" all resolve. An explicit override still wins over this.
+ */
+const READ_ONLY_NAMES = new Set([
+  'sequentialthinking', // @modelcontextprotocol/server-sequential-thinking: reasoning only
+]);
+
+/** Strip separators + case for matching against {@link READ_ONLY_NAMES}. */
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 /** The leading verb token of a tool name (handles snake_case, kebab, camelCase). */
 export function firstToken(name: string): string {
   const normalized = name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
@@ -37,6 +52,7 @@ export function classifyMcpTool(
 ): ToolKind {
   const override = overrides[name];
   if (override) return override;
+  if (READ_ONLY_NAMES.has(normalizeName(name))) return 'read_only';
   const verb = firstToken(name);
   if (READ_VERBS.has(verb)) return 'read_only';
   // Recognized write verb, or anything unrecognized → gated, fail-safe.

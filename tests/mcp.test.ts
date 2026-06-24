@@ -46,6 +46,14 @@ describe('classifyMcpTool', () => {
     assert.equal(classifyMcpTool('list_messages', { list_messages: 'state_mutating' }), 'state_mutating');
     assert.equal(classifyMcpTool('send_email', { send_email: 'read_only' }), 'read_only');
   });
+
+  it('treats known pure-reasoning tools as read_only despite no read verb', () => {
+    assert.equal(classifyMcpTool('sequentialthinking'), 'read_only');
+    assert.equal(classifyMcpTool('sequential_thinking'), 'read_only');
+    assert.equal(classifyMcpTool('sequentialThinking'), 'read_only');
+    // An explicit override still wins over the built-in default.
+    assert.equal(classifyMcpTool('sequentialthinking', { sequentialthinking: 'state_mutating' }), 'state_mutating');
+  });
 });
 
 describe('importMcpTools', () => {
