@@ -1,44 +1,52 @@
-# ARES on Render — API server (+ optional scheduler) when the web UI is on Vercel.
+# ARES on Render — FREE-TIER deploy of the API server (web UI lives on Vercel).
 #
-# Mirrors docker-compose.api.yml: the long-running API server, a managed Redis
-# (durable BullMQ scheduler + memory queue), and an optional background worker
-# that runs the autonomy daemon (morning briefing, inbox scan, consolidation).
+# This is the $0 setup: a single free web service running the API. Postgres is
+# external (Supabase free tier → DATABASE_URL). No Redis and no scheduler worker,
+# because Render has no free worker tier — the API falls back to an in-memory
+# queue when REDIS_URL is unset.
 #
-# Postgres is NOT defined here — point DATABASE_URL at your managed Postgres with
-# pgvector (Supabase, or a Render Postgres with the pgvector extension enabled).
+# Free-tier trade-offs (fine for testing/demo; upgrade later for production):
+#   - Spins down after ~15 min idle → first request after that cold-starts (~30-60s)
+#     and any open chat (SSE) stream drops while idle.
+#   - No persistent disk → the file tools' workspace resets on restart/redeploy.
+#   - No autonomy/cron jobs (morning briefing, inbox scan, consolidation).
+#   - 512 MB RAM.
 #
 # Deploy:
-#   1. Push this file, then in Render: New → Blueprint → pick this repo.
-#   2. Fill the `sync: false` secrets (API key, provider keys, DATABASE_URL, CORS).
+#   1. Push this file → Render: New → Blueprint → pick this repo.
+#   2. Fill the `sync: false` secrets (API key, CORS origin, provider key, DATABASE_URL).
 #   3. Deploy. The API boots via the Dockerfile entrypoint (migrations → serve).
 #
 # After it's up, set Vercel's NEXT_PUBLIC_ARES_API to the API URL Render gives you
-# (e.g. https://ares-api.onrender.com) and set ARES_API_ORIGINS below to your
-# Vercel URL(s), comma-separated, no trailing slash.
+# (e.g. https://ares-api.onrender.com) and set ARES_API_ORIGINS to your Vercel
+# URL(s), comma-separated, no trailing slash.
+#
+# >>> TO SCALE UP LATER (paid): change `plan: free` to `starter`, re-add a `disk:`
+#     for a durable workspace, and uncomment the Redis + scheduler-worker blocks
+#     at the bottom of this file.
 
 services:
-  # --- API server -----------------------------------------------------------
+  # --- API server (free web service) ----------------------------------------
   # Built from the root Dockerfile: runs DB migrations on boot, then `npm run serve`.
   - type: web
     name: ares-api
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter # NOT free — free instances spin down on idle, killing SSE + the scheduler.
-    region: oregon # match this to your Postgres/Redis region to cut latency.
+    plan: free
+    region: oregon # match this to your Postgres region to cut latency.
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       # Bind publicly inside the container; guarded by ARES_API_KEY.
       - key: ARES_API_HOST
         value: 0.0.0.0
-      # Render injects $PORT; the server reads ARES_API_PORT. Keep them aligned.
+      # Keep ARES_API_PORT and the PORT Render routes to aligned.
       - key: ARES_API_PORT
         value: "3001"
       - key: PORT
         value: "3001"
-      # Container-local workspace for the file tools (read_file/write_file/list_files).
-      # Attach a disk so it survives restarts/redeploys.
+      # Ephemeral container-local workspace (no disk on free tier).
       - key: ARES_WORKSPACE_DIR
         value: /data/workspace
 
@@ -51,20 +59,13 @@ services:
       #   e.g. https://ares.vercel.app,https://ares.yourdomain.com
       - key: ARES_API_ORIGINS
         sync: false
-      # Reasoning provider key(s). Set at least one (ANTHROPIC_API_KEY by default).
+      # Reasoning provider key. Set at least one (ANTHROPIC_API_KEY by default).
       - key: ANTHROPIC_API_KEY
         sync: false
-      # Managed Postgres with pgvector (Supabase connection string, or a Render
-      # Postgres with pgvector enabled). Unset → ephemeral in-memory memory (dev only).
+      # Managed Postgres with pgvector (Supabase connection string). Unset →
+      # ephemeral in-memory memory (data lost on restart).
       - key: DATABASE_URL
         sync: false
-
-      # Durable scheduler + memory queue via Render's managed Redis (below).
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: ares-redis
-          property: connectionString
 
       # --- Optional capability keys (uncomment in the dashboard as needed) ----
       # - key: OPENAI_API_KEY        # voice STT/TTS + image gen + reasoning fallback
@@ -77,47 +78,41 @@ services:
       #   sync: false
       # - key: GITHUB_TOKEN          # github_* developer tools
       #   sync: false
-    disk:
-      name: ares-workspace
-      mountPath: /data/workspace
-      sizeGB: 1
 
-  # --- Autonomy daemon (OPTIONAL) -------------------------------------------
-  # Cron jobs: morning briefing, inbox scan, weekly report, nightly consolidation.
-  # Same image as the API; overrides the start command to run the scheduler.
-  # Delete this whole block if you don't want the autonomous loop.
-  - type: worker
-    name: ares-scheduler
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: starter
-    region: oregon
-    autoDeploy: true
-    # Skip the API entrypoint (migrations are owned by ares-api) and run the daemon.
-    dockerCommand: npm run scheduler
-    envVars:
-      - key: ARES_WORKSPACE_DIR
-        value: /data/workspace
-      - key: ARES_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: ares-redis
-          property: connectionString
-      # Optional: enable the webhook trigger layer by setting a secret.
-      # - key: ARES_WEBHOOK_SECRET
-      #   sync: false
-
-  # --- Managed Redis (BullMQ + memory queue) --------------------------------
-  - type: redis
-    name: ares-redis
-    plan: starter
-    region: oregon
-    maxmemoryPolicy: noeviction # BullMQ requires keys are not evicted.
-    ipAllowList: [] # only reachable from your Render services (no public access).
+# ===========================================================================
+# UPGRADE-LATER BLOCKS (paid). Uncomment when you have budget, and flip the
+# API service above to `plan: starter` + add a `disk:` for a durable workspace.
+# ===========================================================================
+#
+#  # --- Autonomy daemon: morning briefing, inbox scan, consolidation ---------
+#  - type: worker
+#    name: ares-scheduler
+#    runtime: docker
+#    dockerfilePath: ./Dockerfile
+#    dockerContext: .
+#    plan: starter            # no free worker tier on Render
+#    region: oregon
+#    autoDeploy: true
+#    dockerCommand: npm run scheduler
+#    envVars:
+#      - key: ARES_WORKSPACE_DIR
+#        value: /data/workspace
+#      - key: ARES_API_KEY
+#        sync: false
+#      - key: ANTHROPIC_API_KEY
+#        sync: false
+#      - key: DATABASE_URL
+#        sync: false
+#      - key: REDIS_URL
+#        fromService:
+#          type: redis
+#          name: ares-redis
+#          property: connectionString
+#
+#  # --- Managed Redis (durable BullMQ scheduler + memory queue) ---------------
+#  - type: redis
+#    name: ares-redis
+#    plan: starter
+#    region: oregon
+#    maxmemoryPolicy: noeviction   # BullMQ requires keys are not evicted.
+#    ipAllowList: []               # only reachable from your Render services.
