@@ -71,6 +71,48 @@ function geminiTranscribeInstruction(vocabulary: string[]): string {
     + `${vocabulary.join(', ')}. For example, "ChatGPT MCP" is two words, not one.`;
 }
 
+/**
+ * A late-bound source of extra vocabulary, resolved at transcription time so it can
+ * reflect the user's evolving world (people/projects in memory, connector names).
+ * Implementations should cache internally — this is awaited on every transcription.
+ */
+export type VocabularySource = () => string[] | Promise<string[]>;
+
+/**
+ * Cap on total terms fed to the transcriber. Whisper's `prompt` is ~224 tokens and
+ * a giant list dilutes the bias, so the static base is always kept and dynamic
+ * terms fill the remainder.
+ */
+const MAX_VOCABULARY_TERMS = 64;
+
+/** Merge base + dynamic terms, case-insensitively deduped and capped. */
+function mergeVocabulary(base: string[], dynamic: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const term of [...base, ...dynamic]) {
+    const trimmed = term.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= MAX_VOCABULARY_TERMS) break;
+  }
+  return out;
+}
+
+/** Resolve the effective vocabulary (static base + best-effort dynamic terms). */
+async function effectiveVocabulary(base: string[], dynamic: VocabularySource | undefined): Promise<string[]> {
+  if (!dynamic) return base;
+  let extra: string[] = [];
+  try {
+    extra = await dynamic();
+  } catch {
+    // Dynamic terms are a bonus — never let a memory/store hiccup break transcription.
+    extra = [];
+  }
+  return mergeVocabulary(base, extra);
+}
+
 export interface OpenAiVoiceOptions {
   apiKey: string;
   /** Speech-to-text model. */
@@ -85,6 +127,8 @@ export interface OpenAiVoiceOptions {
   ttsInstructions?: string;
   /** Domain terms to bias transcription toward (Whisper `prompt`). */
   vocabulary?: string[];
+  /** Late-bound extra terms (e.g. names from memory), merged in per transcription. */
+  dynamicVocabulary?: VocabularySource;
   baseUrl?: string;
   /** Injectable for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
@@ -106,6 +150,7 @@ export class OpenAiVoiceProvider implements VoiceProvider {
   private readonly ttsFormat: string;
   private readonly ttsInstructions: string;
   private readonly vocabulary: string[];
+  private readonly dynamicVocabulary: VocabularySource | undefined;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
@@ -117,6 +162,7 @@ export class OpenAiVoiceProvider implements VoiceProvider {
     this.ttsFormat = opts.ttsFormat ?? 'mp3';
     this.ttsInstructions = opts.ttsInstructions ?? DEFAULT_TTS_INSTRUCTIONS;
     this.vocabulary = opts.vocabulary ?? DEFAULT_VOICE_VOCABULARY;
+    this.dynamicVocabulary = opts.dynamicVocabulary;
     this.baseUrl = opts.baseUrl ?? 'https://api.openai.com/v1';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -128,8 +174,9 @@ export class OpenAiVoiceProvider implements VoiceProvider {
     form.append('model', this.sttModel);
     form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), `audio.${extForMime(mimeType)}`);
     // Bias transcription toward known product names so e.g. "ChatGPT MCP" doesn't
-    // come back as "gptcmcp".
-    const prompt = whisperVocabularyPrompt(this.vocabulary);
+    // come back as "gptcmcp" — base terms plus any late-bound names from memory.
+    const vocabulary = await effectiveVocabulary(this.vocabulary, this.dynamicVocabulary);
+    const prompt = whisperVocabularyPrompt(vocabulary);
     if (prompt) form.append('prompt', prompt);
 
     const res = await this.fetchImpl(`${this.baseUrl}/audio/transcriptions`, {
@@ -232,6 +279,8 @@ export interface GeminiSpeechToTextOptions {
   model?: string;
   /** Domain terms to keep spelled correctly and unmerged in the transcript. */
   vocabulary?: string[];
+  /** Late-bound extra terms (e.g. names from memory), merged in per transcription. */
+  dynamicVocabulary?: VocabularySource;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
@@ -241,17 +290,20 @@ export class GeminiSpeechToTextProvider implements SpeechToTextProvider {
   readonly name = 'gemini';
   private readonly model: string;
   private readonly vocabulary: string[];
+  private readonly dynamicVocabulary: VocabularySource | undefined;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: GeminiSpeechToTextOptions) {
     this.model = opts.model ?? 'gemini-3.1-flash-lite';
     this.vocabulary = opts.vocabulary ?? DEFAULT_VOICE_VOCABULARY;
+    this.dynamicVocabulary = opts.dynamicVocabulary;
     this.baseUrl = opts.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
   async transcribe(audio: Buffer, mimeType: string): Promise<string> {
+    const vocabulary = await effectiveVocabulary(this.vocabulary, this.dynamicVocabulary);
     const res = await this.fetchImpl(
       `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`,
       {
@@ -265,7 +317,7 @@ export class GeminiSpeechToTextProvider implements SpeechToTextProvider {
             role: 'user',
             parts: [
               {
-                text: geminiTranscribeInstruction(this.vocabulary),
+                text: geminiTranscribeInstruction(vocabulary),
               },
               {
                 inlineData: {
@@ -473,25 +525,37 @@ export class FakeVoiceProvider implements VoiceProvider {
  * `OPENAI_API_KEY` is set, so voice stays opt-in and the rest of ARES needs no
  * extra keys. Optional `ARES_VOICE_*` vars override the models/voice.
  */
-export function buildVoiceProvider(env: NodeJS.ProcessEnv = process.env): VoiceProvider | undefined {
+export interface BuildVoiceOptions {
+  /** Late-bound terms (e.g. names from memory) merged into the STT vocabulary. */
+  dynamicVocabulary?: VocabularySource;
+  /** Extra static terms (e.g. connector names) appended to the base vocabulary. */
+  extraVocabulary?: string[];
+}
+
+export function buildVoiceProvider(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: BuildVoiceOptions = {},
+): VoiceProvider | undefined {
   const openaiKey = env.OPENAI_API_KEY;
   const geminiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
   const elevenKey = env.ELEVENLABS_API_KEY;
   const elevenVoice = env.ELEVENLABS_VOICE_ID;
   const sttChoice = env.ARES_VOICE_STT_PROVIDER ?? 'auto';
   const ttsChoice = env.ARES_VOICE_TTS_PROVIDER ?? 'auto';
-  const vocabulary = resolveVoiceVocabulary(env);
+  const vocabulary = [...resolveVoiceVocabulary(env), ...(opts.extraVocabulary ?? [])];
+  const { dynamicVocabulary } = opts;
 
   const stt = sttChoice === 'gemini' || (sttChoice === 'auto' && Boolean(geminiKey))
     ? geminiKey
       ? new GeminiSpeechToTextProvider({
           apiKey: geminiKey,
           vocabulary,
+          ...(dynamicVocabulary ? { dynamicVocabulary } : {}),
           ...(env.ARES_GEMINI_STT_MODEL ? { model: env.ARES_GEMINI_STT_MODEL } : {}),
         })
       : undefined
     : openaiKey
-      ? new OpenAiSpeechToTextProvider(openAiOptions(env, openaiKey))
+      ? new OpenAiSpeechToTextProvider(openAiOptions(env, openaiKey, opts))
       : undefined;
 
   const tts = selectTts(env, { openaiKey, geminiKey, elevenKey, elevenVoice, ttsChoice });
@@ -541,10 +605,11 @@ function selectTts(
   return openai() ?? gemini();
 }
 
-function openAiOptions(env: NodeJS.ProcessEnv, apiKey: string): OpenAiVoiceOptions {
+function openAiOptions(env: NodeJS.ProcessEnv, apiKey: string, voice: BuildVoiceOptions = {}): OpenAiVoiceOptions {
   return {
     apiKey,
-    vocabulary: resolveVoiceVocabulary(env),
+    vocabulary: [...resolveVoiceVocabulary(env), ...(voice.extraVocabulary ?? [])],
+    ...(voice.dynamicVocabulary ? { dynamicVocabulary: voice.dynamicVocabulary } : {}),
     ...(env.ARES_VOICE_STT_MODEL ? { sttModel: env.ARES_VOICE_STT_MODEL } : {}),
     ...(env.ARES_VOICE_TTS_MODEL ? { ttsModel: env.ARES_VOICE_TTS_MODEL } : {}),
     ...(env.ARES_VOICE_TTS_VOICE ? { ttsVoice: env.ARES_VOICE_TTS_VOICE } : {}),

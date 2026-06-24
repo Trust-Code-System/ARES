@@ -28,6 +28,7 @@ import { MCP_MANAGEMENT_PROMPT_NOTE } from '../mcp/tools.js';
 import { Agent } from '../agent/orchestrator.js';
 import { ApiServer } from './httpServer.js';
 import { buildVoiceProvider } from './voice.js';
+import { memoryVocabularySource } from './voiceVocabulary.js';
 import { buildTranscriptCleaner } from './transcriptCleaner.js';
 import { ApiKeyAuthenticator } from './auth.js';
 import { buildNotificationStore } from '../notifications/store.js';
@@ -159,7 +160,13 @@ async function main(): Promise<void> {
     preferenceSeeder: buildPreferenceSeeder(feedback),
   });
 
-  const voice = buildVoiceProvider();
+  // Bias speech-to-text toward the user's own world: connector names (static) and
+  // the people/projects in memory (dynamic, cached). Helps STT spell personal
+  // proper nouns it could never guess.
+  const voice = buildVoiceProvider(process.env, {
+    dynamicVocabulary: memoryVocabularySource(memory.structured),
+    extraVocabulary: config.mcpServers.map((s) => s.name),
+  });
   // Opt-in LLM cleanup of voice transcripts (fixes misheard product/brand names
   // via the fast model). Off unless ARES_VOICE_CLEANUP is truthy and voice is on.
   const voiceCleanupEnabled = ['true', '1', 'on', 'yes'].includes(

@@ -19,11 +19,13 @@ import {
   buildVoiceProvider,
 } from '../src/server/voice.js';
 import { buildTranscriptCleaner } from '../src/server/transcriptCleaner.js';
+import { memoryVocabularySource } from '../src/server/voiceVocabulary.js';
 import { ApiServer } from '../src/server/httpServer.js';
 import type { ApiDeps } from '../src/server/api.js';
 import { InMemoryActivityFeed, InMemoryKillSwitch } from '../src/autonomy/store.js';
 import { InMemoryConfirmationQueue, InMemoryRulesStore } from '../src/safety/store.js';
 import { InMemoryStructuredStore } from '../src/memory/stores.js';
+import type { StructuredStore } from '../src/memory/stores.js';
 import { InMemoryAuditLog } from '../src/logging/logger.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import type { AgentInput, AgentRunResult, Logger } from '../src/types.js';
@@ -372,5 +374,67 @@ describe('transcript cleaner', () => {
       throw new Error('model down');
     });
     assert.equal(await clean('untouched'), 'untouched');
+  });
+});
+
+describe('dynamic voice vocabulary', () => {
+  it('surfaces person/project names from memory, skipping other kinds', async () => {
+    const store = new InMemoryStructuredStore();
+    await store.upsert({ kind: 'person', subject: 'Petrobrain', content: 'a colleague' });
+    await store.upsert({ kind: 'project', subject: 'Ares HUD', content: 'the voice UI' });
+    await store.upsert({ kind: 'preference', subject: 'user', content: 'likes concise answers' });
+    const terms = await memoryVocabularySource(store)();
+    assert.ok(terms.includes('Petrobrain'));
+    assert.ok(terms.includes('Ares HUD'));
+    assert.ok(!terms.includes('user'));
+  });
+
+  it('caches results within the TTL', async () => {
+    const base = new InMemoryStructuredStore();
+    await base.upsert({ kind: 'person', subject: 'Alice', content: 'x' });
+    let allCalls = 0;
+    const store: StructuredStore = {
+      upsert: (f) => base.upsert(f),
+      search: (q, k, kinds) => base.search(q, k, kinds),
+      all: () => { allCalls++; return base.all(); },
+      remove: (id) => base.remove(id),
+    };
+    const source = memoryVocabularySource(store, { ttlMs: 10_000 });
+    await source();
+    await source();
+    assert.equal(allCalls, 1);
+  });
+
+  it('merges dynamic memory names into the Gemini transcription request', async () => {
+    let captured = '';
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      captured = String(init?.body ?? '');
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = new GeminiSpeechToTextProvider({
+      apiKey: 'k',
+      vocabulary: ['ChatGPT'],
+      dynamicVocabulary: async () => ['Petrobrain'],
+      fetchImpl,
+    });
+    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    assert.match(captured, /Petrobrain/);
+    assert.match(captured, /ChatGPT/);
+  });
+
+  it('ignores a failing dynamic source and still uses the base vocabulary', async () => {
+    let captured = '';
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      captured = String(init?.body ?? '');
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = new GeminiSpeechToTextProvider({
+      apiKey: 'k',
+      vocabulary: ['ChatGPT'],
+      dynamicVocabulary: async () => { throw new Error('memory down'); },
+      fetchImpl,
+    });
+    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    assert.match(captured, /ChatGPT/);
   });
 });
